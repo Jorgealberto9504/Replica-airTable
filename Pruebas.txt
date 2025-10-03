@@ -504,3 +504,451 @@ Revisar endpoint auditoria sobre base que no le pertenece.  GET
 http://localhost:8080/bases/1/audit
 no puedes ver porque no es admin, solo puede auditar sus bases creadas
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+tarea 12.1<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+Pruebas filtros
+
+
+
+•	Campo (TEXT / Name)
+
+Devuelve todas las fila que contengan juan en la columna 1
+http://localhost:8080/bases/1/tables/1/records/query. POST
+
+{
+  "all": true,
+  "logic": "AND",
+  "filters": [
+    { "kind": "cond", "fieldId": 1, "op": "contains", "value": "juan" }
+  ]
+}
+
+Devuelve todas las filas que no contengan juan
+      
+      {
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 1, "op": "notcontains", "value": "juan" }
+  ]
+}
+
+
+Devuelve todas las filas que contengan exactamente Juan Juarez
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 1, "op": "eq", "value": "Juan Juarez" }
+  ]
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+	•	Campo (CURRENCY / Precio)
+
+  Devuelve todas las filas que contengan en la columna 3 un valor mayor a 1000
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 3, "op": "gt", "value": 1000 }
+  ]
+}
+
+
+
+Devuelve todas las filas que contengan un rango entre 100 y 1000 en la columna 3
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 3, "op": "between", "values": [100, 1000] }
+  ]
+}
+
+
+
+
+Devuelve las filas que contengan una cantidad menor que 100
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 3, "op": "lt", "value": 100 }
+  ]
+}
+
+
+
+
+
+
+
+
+
+	•	Campo  (CHECKBOX)
+
+
+Devuelve todas las filas que la columna 4 sea true en su checkbox
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 4, "op": "istrue" }
+  ]
+}
+
+
+devuelve todas las filas que su columna 4 sea false en su checkbox
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 4, "op": "isfalse" }
+  ]
+}
+
+
+
+
+
+
+
+
+•	Campo (DATE)
+
+Devuelve todas las filas que en su columna 5 de fecha contengan la fecha 11-10-25
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 5, "op": "on", "value": "2025-10-11" }
+  ]
+}
+
+Devuelve todos las filas que en su columna 5 de fecha contengan en una fecha posterior al al 15-10-25
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 5, "op": "after", "value": "2025-10-15" }
+  ]
+}
+
+Devuelve todas las filas que en columna 5 tengo un rango de fecha entre 2025-09-01", "2025-10-15
+
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 5, "op": "between", "value": ["2025-09-01", "2025-10-15"] }
+  ]
+}
+
+
+
+
+
+
+
+
+
+
+
+	•	Campo (DATETIME)
+
+Devuelve todas las filas que sean anteriores a la fecha y hora establecido
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 6, "op": "before", "value": "2025-10-01T00:00:00.000Z" }
+  ]
+}
+
+
+Devuelve todas las filas que sean posteriores a la fecha y hr establecidos en la columna DATETIME
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 6, "op": "after", "value": "2025-10-15T00:00:00.000Z" }
+  ]
+}
+
+
+
+
+
+
+
+
+	•	Campo 7 (TIME)
+
+Devuelve todas las filas que contengan un valor menor al que estblezcamos
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 7, "op": "lt", "value": 600 }
+  ]
+}
+
+
+Devuelve todas las filas que en su columna de tiempo contenggan un valor mayor o igual a el valor establecido
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 7, "op": "gte", "value": 720 }
+  ]
+}
+
+
+
+Devuelve todas las filas que su valor sea igual a el valor que establezcamos
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 7, "op": "eq", "value": 540 }
+  ]
+}
+
+
+
+
+
+
+
+
+	•	Campo 8 (SINGLE_SELECT)
+
+Devuelve todas las filas en las que se tenga seleccionada la opcion que establezcamos en el filtro
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 8, "op": "eq", "value": 1 }
+  ]
+}
+
+
+
+Devuelve todas las filas que no tengan seleccion en la columna 8 SINGLE_SELECT
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 8, "op": "isempty" }
+  ]
+}
+
+
+
+
+
+	•	Campo 9 (MULTI_SELECT)
+
+
+  Devuelve todas las filas que incluyan la opcion que establezcamos
+
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 9, "op": "includes_any", "values": [5] }
+  ]
+}
+
+devuelve todas las filas que incluyan todas las opciones que establezcamos
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 9, "op": "includes_all", "values": [5, 6] }
+  ]
+}
+
+
+Devuelve todas las filas que no incluyan el dato que establezcamos
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 9, "op": "excludes_any", "values": [6] }
+  ]
+}
+
+Devuelve todas las filas que esten sin seleccion
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 9, "op": "isempty" }
+  ]
+}
+
+
+
+
+
+
+
+Varias condiciones a la vez
+
+Devuelve todas las filas que contengan juan el la columna de nombre y que tenga un valor mayor a 1000
+
+{
+  "all": true,
+  "logic": "AND",
+  "filters": [
+    { "kind": "cond", "fieldId": 1, "op": "contains", "value": "juan" },
+    { "kind": "cond", "fieldId": 3, "op": "gt", "value": 1000 }
+  ]
+}
+
+
+
+devuelve todas las filas que tengan juan en su columna nombre o que tengan mas de 1400 en su columna Precio
+
+{
+  "all": true,
+  "logic": "OR",
+  "filters": [
+    { "kind": "cond", "fieldId": 1, "op": "contains", "value": "juan" },
+    { "kind": "cond", "fieldId": 3, "op": "gt", "value": 1400 }
+  ]
+}
+
+
+
+
+
+
+Tarea 12.2
+
+ordenamiento ascendente y descendente
+
+TEXT
+
+A → Z (ascendente)
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 1, "dir":"asc" } ] }
+
+Z → A (descendente)
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 1, "dir":"desc" } ] }
+
+
+
+LONG_TEXT
+
+A → Z
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 2, "dir":"asc" } ] }
+
+Z → A
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 2, "dir":"desc" } ] }
+
+
+
+
+NUMBER
+
+Menor → Mayor
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 3, "dir":"asc" } ] }
+
+Mayor → Menor
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 3, "dir":"desc" } ] }
+
+Con nulls primero:
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 3, "dir":"asc", "nulls":"first" } ] }
+
+
+
+CHECKBOX
+
+false → true (asc)
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 4, "dir":"asc" } ] }
+
+true → false (desc)
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 4, "dir":"desc" } ] }
+
+
+
+
+
+DATE
+
+Más antiguo → más reciente
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 5, "dir":"asc" } ] }
+
+Más reciente → más antiguo{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 5, "dir":"desc" } ] }
+
+
+
+
+DATETIME
+
+Más antiguo → más reciente
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 6, "dir":"asc" } ] }
+
+
+Más reciente → más antiguo
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 6, "dir":"desc" } ] }
+
+
+
+
+
+TIME
+
+00:00 → 23:59
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 7, "dir":"asc" } ] }
+
+23:59 → 00:00
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 7, "dir":"desc" } ] }
+
+
+
+
+
+
+SINGLE_SELECT
+
+Según el orden de opciones (primera → última)
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 8, "dir":"asc" } ] }
+
+Última → primera
+{ "all": true, "filters": [], "sort": [ { "kind":"field", "fieldId": 8, "dir":"desc" } ] }
+
+
+
+
+Name A→Z y price mayor a menor
+{
+  "all": true,
+  "filters": [],
+  "sort": [
+    { "kind":"field", "fieldId": 1, "dir":"asc" },
+    { "kind":"field", "fieldId": 3, "dir":"desc" }
+
+  ]
+}

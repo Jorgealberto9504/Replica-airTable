@@ -301,7 +301,7 @@ export default function BaseGrid({
                       className="base-card-title"
                       onClick={(e) => { e.stopPropagation(); openBase(b.id); }}
                     >
-                      {b.name + ' este es el nombre de la base'}
+                      {b.name}
                     </button>
 
                     {showMenu && (
@@ -368,7 +368,7 @@ export default function BaseGrid({
                     className="menu-item"
                     onClick={() => setRenameOpen({ open: true, id: menuFor!, name: currentName })}
                   >
-                    Cambiar nombrrrrre
+                    Cambiar nombre
                   </button>
                   <button
                     className="menu-item"

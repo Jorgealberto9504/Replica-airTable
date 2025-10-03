@@ -1,3 +1,4 @@
+// apps/backend/src/routes/records.routes.ts
 import { Router } from 'express';
 import { requireAuth } from '../middlewares/auth.middleware.js';
 import {
@@ -5,6 +6,8 @@ import {
   createRecord,
   patchRecord,
   deleteRecord,
+  // NEW
+  queryRecords,
   // trash
   listTrashedRecords,
   restoreRecord,
@@ -22,6 +25,9 @@ router.use(requireAuth);
 /* Records */
 router.get('/', listRecords);                    // GET    /bases/:baseId/tables/:tableId/records
 router.post('/', createRecord);                  // POST   /bases/:baseId/tables/:tableId/records
+router.post('/query', queryRecords);             // POST   /bases/:baseId/tables/:tableId/records/query (filtros)
+/* Importante: /query va antes de /:recordId para no colisionar. */
+
 router.patch('/:recordId', patchRecord);         // PATCH  /bases/:baseId/tables/:tableId/records/:recordId
 router.delete('/:recordId', deleteRecord);       // DELETE /bases/:baseId/tables/:tableId/records/:recordId (soft)
 
