@@ -1,4 +1,3 @@
-// apps/backend/src/routes/auth.routes.ts
 import { Router } from 'express';
 import {
   login,
@@ -7,32 +6,33 @@ import {
   adminRegister,
   changePasswordFirstLogin,
 } from '../controllers/auth.controller.js';
-
-import { requireAuth, requireAuthAllowMustChange, } from '../middlewares/auth.middleware.js';
-
+import {
+  requireAuth,
+  requireAuthAllowMustChange,
+} from '../middlewares/auth.middleware.js';
 import { guardGlobal } from '../permissions/guard.js';
+import { loginRateLimiter } from '../middlewares/rate-limit.middleware.js';
 
 const router = Router();
 
-//POST /auth/login  { email, password }
-//LOGUEAR USUARIO
-router.post('/login', login);  
+// POST /auth/login  { email, password }  (con rate limit)
+router.post('/login', loginRateLimiter, login);
 
-//POST /auth/logout  (borra cookie)
-//LOGOUT USUARIO
-router.post('/logout', requireAuth, logout); 
+// POST /auth/logout  (borra cookie)
+router.post('/logout', requireAuth, logout);
 
-//GET /auth/me
-//DEVUELVE DATOS DE USUARIO AUTENTICADO
-router.get('/me', requireAuth, me);          
+// GET /auth/me  (usuario autenticado)
+router.get('/me', requireAuth, me);
 
-//POST /auth/admin/register  { email, password }
-//REGISTRAR NUEVO USUARIO (sólo sysadmin)
-router.post('/admin/register', requireAuth, guardGlobal('platform:users:manage'), adminRegister);    // SOLO SYSADMIN por rules.ts
+// POST /auth/admin/register  (solo SYSADMIN vía guardGlobal)
+router.post(
+  '/admin/register',
+  requireAuth,
+  guardGlobal('platform:users:manage'),
+  adminRegister
+);
 
-
-// POST /auth/change-password  {newPassword, confirm }
-// Permite cambiar la contraseña en el primer login cuando mustChangePassword=true
+// POST /auth/change-password  (permite cuando mustChangePassword=true)
 router.post('/change-password', requireAuthAllowMustChange, changePasswordFirstLogin);
 
 export default router;

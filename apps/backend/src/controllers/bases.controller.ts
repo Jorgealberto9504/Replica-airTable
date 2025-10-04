@@ -9,7 +9,7 @@ import {
 
   // === BASES existentes ===
   listAccessibleBasesForUser,
-  listAllBasesForSysadmin,   // SYSADMIN: lista TODAS (excluye papelera)
+  listAllBasesForSysadmin,   // (queda para compat / otros usos)
   getBaseById,
   updateBase,
   deleteBase,
@@ -23,6 +23,9 @@ import {
 
   // ===== ADMIN GLOBAL =====
   listTrashedBasesForAdmin,
+
+  // ===== NUEVO: búsqueda paginada en DB =====
+  searchBasesPaged,
 } from '../services/bases.service.js';
 import {
   purgeTrashedTablesOlderThan,
@@ -175,22 +178,17 @@ export async function listMyBasesCtrl(req: Request, res: Response) {
   const page = Math.max(1, Number(req.query.page) || 1);
   const rawPageSize = Number(req.query.pageSize) || 12;
   const pageSize = Math.min(100, Math.max(1, rawPageSize));
-  const q = String(req.query.q ?? '').trim().toLowerCase();
+  const q = String(req.query.q ?? '').trim();
 
-  const all =
-    me.platformRole === 'SYSADMIN'
-      ? await listAllBasesForSysadmin(me.id)
-      : await listAccessibleBasesForUser(me.id);
+  const { bases, total } = await searchBasesPaged({
+    viewerId: me.id,
+    isSysadmin: me.platformRole === 'SYSADMIN',
+    q,
+    page,
+    pageSize,
+  });
 
-  const filtered = q
-    ? all.filter((b: any) => (b.name ?? '').toString().toLowerCase().includes(q))
-    : all;
-
-  const total = filtered.length;
-  const start = (page - 1) * pageSize;
-  const slice = filtered.slice(start, start + pageSize);
-
-  return res.json({ ok: true, bases: slice, total, page, pageSize });
+  return res.json({ ok: true, bases, total, page, pageSize });
 }
 
 export async function getBaseCtrl(req: Request, res: Response) {
@@ -217,19 +215,19 @@ export async function resolveBaseCtrl(req: Request, res: Response) {
     ]);
 
     return res.json({
-  ok: true,
-  base,
-  defaultTableId, // null si no hay tablas
-  gridMeta: {
-    totalTables,
-    // Stub ampliado: listo para cuando agregues columnas reales
-    columns: [] as Array<{ id: number; name: string; type: string; width?: number }>,
-    primaryColumnId: null as number | null,
-    defaultSort: null as null | { columnId: number; direction: 'asc' | 'desc' },
-    rowHeight: 'default' as 'default' | 'compact' | 'tall',
-    version: 1,
-  },
-});
+      ok: true,
+      base,
+      defaultTableId, // null si no hay tablas
+      gridMeta: {
+        totalTables,
+        // Stub ampliado: listo para cuando agregues columnas reales
+        columns: [] as Array<{ id: number; name: string; type: string; width?: number }>,
+        primaryColumnId: null as number | null,
+        defaultSort: null as null | { columnId: number; direction: 'asc' | 'desc' },
+        rowHeight: 'default' as 'default' | 'compact' | 'tall',
+        version: 1,
+      },
+    });
   } catch (err: any) {
     return res
       .status(err?.status ?? 500)

@@ -845,7 +845,21 @@ devuelve todas las filas que tengan juan en su columna nombre o que tengan mas d
 
 
 
+
+
+{
+  "all": true,
+  "filters": [
+    { "kind": "cond", "fieldId": 5, "op": "on", "value": "2025-10-11" }
+  ]
+}
+
+
+
 Tarea 12.2
+
+http://localhost:8080/bases/1/tables/1/records/query POST
+
 
 ordenamiento ascendente y descendente
 

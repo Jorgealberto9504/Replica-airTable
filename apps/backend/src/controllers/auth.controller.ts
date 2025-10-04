@@ -1,7 +1,12 @@
 // apps/backend/src/controllers/auth.controller.ts
 import type { Request, Response } from 'express';
 import { prisma } from '../services/db.js';
-import { createUserAdmin, findUserByEmail, isUniqueEmailError } from '../services/users.service.js';
+import {
+  createUserAdmin,
+  findUserByEmail,
+  isUniqueEmailError,
+  getUserForLogin, // ✅ usamos la versión del service
+} from '../services/users.service.js';
 import { checkPassword, hashPassword } from '../services/security/password.service.js';
 import { signJwt } from '../services/security/jwt.service.js';
 import { getAuthUser } from '../middlewares/auth.middleware.js';
@@ -26,23 +31,6 @@ function cookieOpts() {
     (process.env.FRONTEND_ORIGIN ?? '').startsWith('https://');
 
   return { sameSite, secure };
-}
-
-async function getUserForLogin(emailRaw: string) {
-  const email = emailRaw.trim().toLowerCase();
-  return prisma.user.findUnique({
-    where: { email },
-    select: {
-      id: true,
-      email: true,
-      fullName: true,
-      passwordHash: true,
-      platformRole: true,
-      isActive: true,
-      mustChangePassword: true,
-      canCreateBases: true,
-    },
-  });
 }
 
 function isEmailBasic(email: string) {
@@ -73,7 +61,7 @@ export async function login(req: Request, res: Response) {
 
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
-    ...cookieOpts(),           // <<< AQUI
+    ...cookieOpts(),
     maxAge: MAX_AGE_MS,
     path: '/',
   });
@@ -94,7 +82,7 @@ export async function login(req: Request, res: Response) {
 export async function logout(_req: Request, res: Response) {
   res.clearCookie(COOKIE_NAME, {
     httpOnly: true,
-    ...cookieOpts(),           // <<< AQUI TAMBIÉN
+    ...cookieOpts(),
     path: '/',
   });
   return res.json({ ok: true });
@@ -163,7 +151,7 @@ export async function changePasswordFirstLogin(req: Request, res: Response) {
   const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
-    ...cookieOpts(),           // <<< AQUI TAMBIÉN
+    ...cookieOpts(),
     maxAge: MAX_AGE_MS,
     path: '/',
   });
