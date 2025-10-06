@@ -105,6 +105,7 @@
   .menu-item-eliminar { @apply w-full text-left bg-white px-3 py-2 rounded-lg cursor-pointer font-semibold text-red-700 hover:bg-slate-100; }
 
   /* ===== Sidebar Workspaces ===== */
+  .menu-item-danger{ @apply w-full text-left bg-white px-3 py-2 rounded-lg cursor-pointer font-semibold text-red-700 hover:bg-slate-100; }
   .ws-sidebar { @apply w-[260px] flex flex-col bg-white border-r border-slate-200; }
 
   /* ===== Listas y tarjetas (Bases / Users) ===== */

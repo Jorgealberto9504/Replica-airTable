@@ -1,11 +1,16 @@
-// apps/frontend/src/pages/ChangePassword.tsx
 // -----------------------------------------------------------------------------
-// Cambiar contraseña (sin estilos inline).
+// Cambiar contraseña (primer login): valida, llama al backend, refresca sesión
+// y navega al dashboard (con fallback duro por si el estado tarda un tick).
 // -----------------------------------------------------------------------------
 import { useState } from 'react';
-import { postJSON } from '../api/http';
+import { useNavigate } from 'react-router-dom';
+import { changePasswordFirstLogin } from '../api/auth';
+import { useAuth } from '../auth/AuthContext';
 
 export default function ChangePassword() {
+  const nav = useNavigate();
+  const { refresh } = useAuth();
+
   const [pwd, setPwd] = useState('');
   const [confirm, setConfirm] = useState('');
   const [err, setErr] = useState<string | null>(null);
@@ -22,15 +27,19 @@ export default function ChangePassword() {
 
     setLoading(true);
     try {
-      const resp = await postJSON<{ ok: boolean }>('/auth/change-password', {
-        newPassword: pwd,
-        confirm,
-      });
+      const resp = await changePasswordFirstLogin({ newPassword: pwd, confirm });
       if (resp.ok) {
         setOk(true);
-        setTimeout(() => { window.location.href = '/dashboard'; }, 400);
-      } else {
-        setErr('No se pudo cambiar la contraseña');
+        // Refresca user (mustChangePassword debe pasar a false)
+        await refresh();
+
+        // Navegación con router + fallback hard-reload por seguridad
+        nav('/dashboard', { replace: true });
+        setTimeout(() => {
+          if (location.pathname !== '/dashboard') {
+            window.location.assign('/dashboard');
+          }
+        }, 0);
       }
     } catch (e: any) {
       setErr(e?.message ?? 'Error de conexión');
@@ -48,7 +57,7 @@ export default function ChangePassword() {
         {err && <div className="alert-error" role="alert">{err}</div>}
         {ok && <div className="alert-success" role="alert">Contraseña actualizada.</div>}
 
-        <form onSubmit={handleSubmit} className="grid gap-3">
+        <form onSubmit={handleSubmit} className="grid gap-3" autoComplete="off">
           <label className="label" htmlFor="pwd">Nueva contraseña</label>
           <input
             id="pwd"
@@ -74,6 +83,11 @@ export default function ChangePassword() {
             disabled={loading}
             required
           />
+
+          <div className="muted text-sm">
+            Debe tener 8+ caracteres, mayúscula, minúscula, número y símbolo.
+            No puede ser la misma que tu contraseña anterior.
+          </div>
 
           <button className="btn-primary" type="submit" disabled={loading}>
             {loading ? 'Guardando…' : 'Cambiar contraseña'}

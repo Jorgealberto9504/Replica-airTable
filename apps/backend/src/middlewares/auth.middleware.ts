@@ -4,7 +4,7 @@ import { verifyJwt } from '../services/security/jwt.service.js';
 
 const COOKIE_NAME = process.env.COOKIE_NAME ?? 'session';
 
-// ===== Cache LRU simple (memoria local) =====
+// ===== Tipos =====
 type CoreUser = {
   id: number;
   email: string;
@@ -14,6 +14,8 @@ type CoreUser = {
   mustChangePassword: boolean;
   canCreateBases: boolean;
 };
+
+// ===== Cache LRU simple (memoria local) =====
 const AUTH_USER_CACHE_TTL_MS = Number(process.env.AUTH_USER_CACHE_TTL_MS ?? 30_000);
 const userCache = new Map<number, { exp: number; user: CoreUser }>();
 
@@ -38,6 +40,11 @@ async function loadUserCore(userId: number): Promise<CoreUser | null> {
   if (!user) return null;
   userCache.set(userId, { exp: now + AUTH_USER_CACHE_TTL_MS, user });
   return user;
+}
+
+// <<< NUEVO: invalidación explícita del caché de un usuario >>>
+export function invalidateAuthUserCache(userId: number) {
+  userCache.delete(userId);
 }
 
 // Factory para evitar duplicar lógica
