@@ -21,7 +21,7 @@ export function doLogout() {
   return postJSON<{ ok: boolean }>('/auth/logout', {});
 }
 
-// Admin: ya lo tenías
+// Admin
 export function adminRegisterUser(input: {
   email: string;
   fullName: string;
@@ -32,10 +32,15 @@ export function adminRegisterUser(input: {
   return postJSON<{ ok: boolean; user?: any }>('/auth/admin/register', input);
 }
 
-// <<< NUEVO >>>  POST /auth/change-password
+// Cambio de contraseña (primer login)
 export function changePasswordFirstLogin(input: {
   newPassword: string;
   confirm: string;
 }) {
   return postJSON<{ ok: boolean }>('/auth/change-password', input);
+}
+
+// <<< NUEVO >>> Solicitud de restablecimiento (envía email con link)
+export function forgotPassword(email: string) {
+  return postJSON<{ ok: boolean }>('/auth/forgot-password', { email });
 }

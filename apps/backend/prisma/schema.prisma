@@ -1,5 +1,3 @@
-// apps/backend/prisma/schema.prisma
-
 // === Cliente de Prisma (genera tipos y métodos tipados) ===
 generator client {
   provider = "prisma-client-js"
@@ -117,11 +115,14 @@ model User {
   recordCellsUpdated RecordCell[] @relation("RecordCellUpdatedBy")
 
   // Comentarios
-  commentsCreated Comment[] @relation("CommentAuthor") // escritos por este usuario
-  commentsUpdated Comment[] @relation("CommentEditor") // editados por este usuario
+  commentsCreated Comment[] @relation("CommentAuthor")
+  commentsUpdated Comment[] @relation("CommentEditor")
 
-  // NEW: eventos de auditoría generados por este usuario
+  // Eventos de auditoría generados por este usuario
   auditEvents AuditEvent[] @relation("AuditByUser")
+
+  // NEW: tokens de restablecimiento de contraseña
+  passwordResetTokens PasswordResetToken[]
 }
 
 model Workspace {
@@ -164,7 +165,7 @@ model Base {
   members BaseMember[]
   tables  TableDef[]
 
-  // NEW: backref de auditoría (eventos de esta base)
+  // backref de auditoría (eventos de esta base)
   auditEvents AuditEvent[]
 
   @@unique([ownerId, name, isTrashed])
@@ -203,7 +204,7 @@ model TableDef {
   fields  Field[]
   records RecordRow[]
 
-  // NEW: backref de auditoría
+  // backref de auditoría
   auditEvents AuditEvent[]
 
   @@unique([baseId, name, isTrashed])
@@ -240,7 +241,7 @@ model Field {
   cells   RecordCell[]
   options SelectOption[] // para SINGLE/MULTI
 
-  // NEW: backref de auditoría
+  // backref de auditoría
   auditEvents AuditEvent[]
 
   @@unique([tableId, name, isTrashed])
@@ -294,7 +295,7 @@ model RecordRow {
 
   comments Comment[] // comentarios asociados a esta fila
 
-  // NEW: backref de auditoría
+  // backref de auditoría
   auditEvents AuditEvent[]
 
   @@index([tableId])
@@ -357,22 +358,22 @@ model RecordCellOption {
    COMENTARIOS (por fila, sin hilos)
    ============================================================ */
 model Comment {
-  id          Int       @id @default(autoincrement())                           // id del comentario
-  recordId    Int                                                             // FK a la fila comentada
+  id          Int       @id @default(autoincrement())
+  recordId    Int
   record      RecordRow  @relation(fields: [recordId], references: [id], onDelete: Cascade)
 
-  body        String                                                            // contenido
+  body        String
 
-  createdAt   DateTime   @default(now())                                        // creado
-  updatedAt   DateTime   @updatedAt                                             // última edición
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 
-  createdById Int?                                                               // autor (nullable)
+  createdById Int?
   createdBy   User?      @relation("CommentAuthor", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedById Int?                                                               // último editor
+  updatedById Int?
   updatedBy   User?      @relation("CommentEditor", fields: [updatedById], references: [id], onDelete: SetNull)
 
-  isTrashed   Boolean    @default(false)                                         // soft delete
-  trashedAt   DateTime?                                                          // cuándo se mandó a papelera
+  isTrashed   Boolean    @default(false)
+  trashedAt   DateTime?
 
   @@index([recordId, createdAt])
   @@index([isTrashed])
@@ -386,32 +387,54 @@ model Comment {
    - Guarda actor (userId, ip), acción (enum) y payload (details) para diffs.
    ============================================================ */
 model AuditEvent {
-  id        BigInt   @id @default(autoincrement())                 // id grande para alto volumen
-  createdAt DateTime @default(now())                               // timestamp del evento
+  id        BigInt   @id @default(autoincrement())
+  createdAt DateTime @default(now())
 
   // actor
-  userId Int?                                                       // usuario que ejecutó (nullable)
+  userId Int?
   user   User? @relation(name: "AuditByUser", fields: [userId], references: [id], onDelete: SetNull)
-  ip     String?                                                    // IP opcional
+  ip     String?
 
   // ámbito
-  baseId  Int                                                       // siempre pertenece a una base
-  base    Base      @relation(fields: [baseId], references: [id], onDelete: Cascade)
-  tableId Int?
-  table   TableDef?  @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  baseId   Int
+  base     Base      @relation(fields: [baseId], references: [id], onDelete: Cascade)
+  tableId  Int?
+  table    TableDef?  @relation(fields: [tableId], references: [id], onDelete: SetNull)
   recordId Int?
-  record  RecordRow? @relation(fields: [recordId], references: [id], onDelete: SetNull)
-  fieldId Int?
-  field   Field?     @relation(fields: [fieldId], references: [id], onDelete: SetNull)
+  record   RecordRow? @relation(fields: [recordId], references: [id], onDelete: SetNull)
+  fieldId  Int?
+  field    Field?     @relation(fields: [fieldId], references: [id], onDelete: SetNull)
 
   // acción
-  action  AuditAction                                               // código de acción
-  summary String                                                    // descripción legible (UI)
-  details Json?                                                     // payload/diff opcional
+  action  AuditAction
+  summary String
+  details Json?
 
   @@index([baseId, createdAt])
   @@index([tableId])
   @@index([recordId])
   @@index([fieldId])
   @@index([userId])
+}
+
+/* ============================================================
+   NEW: Password Reset Tokens
+   - Soporte para “Olvidé mi contraseña”.
+   - Token de un solo uso con expiración y marca de uso.
+   ============================================================ */
+model PasswordResetToken {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash  String   @unique            // hash (sha256) del token raw
+  expiresAt  DateTime                    // cuándo expira el enlace
+  usedAt     DateTime?                   // marca de consumo (si ya se usó)
+  createdAt  DateTime @default(now())
+
+  ip         String?
+  userAgent  String?
+
+  @@index([userId])
+  @@index([expiresAt])
 }
