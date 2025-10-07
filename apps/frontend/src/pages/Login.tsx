@@ -1,7 +1,9 @@
+// apps/frontend/src/pages/Login.tsx
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { postJSON } from '../api/http';
 import logo from '../assets/mbq-logo.png';
+import ForgotPasswordModal from '../pages/components/ForgotPasswordModal';
 
 type LoginResp = {
   ok: boolean;
@@ -21,6 +23,9 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Modal "Olvidé mi contraseña"
+  const [showForgot, setShowForgot] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -102,12 +107,30 @@ export default function Login() {
               disabled={loading}
             />
 
+            <div className="flex items-center justify-between text-sm">
+              <span />
+              <button
+                type="button"
+                className="link"
+                onClick={() => setShowForgot(true)}
+                disabled={loading}
+              >
+                ¿Olvidaste tu contraseña?
+              </button>
+            </div>
+
             <button className="btn-primary pill" type="submit" disabled={loading}>
               {loading ? 'Entrando…' : 'Entrar'}
             </button>
           </form>
         </section>
       </div>
+
+      {/* Modal de "Olvidé mi contraseña" */}
+      <ForgotPasswordModal
+        open={showForgot}
+        onClose={() => setShowForgot(false)}
+      />
     </div>
   );
 }

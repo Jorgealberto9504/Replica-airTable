@@ -16,7 +16,7 @@ export type AuthUser = {
 type AuthContextValue = {
   user: AuthUser | null;
   loading: boolean;
-  mustChangePassword: boolean;             // <<< NUEVO
+  mustChangePassword: boolean;
   login: (email: string, password: string) => Promise<AuthUser>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -27,8 +27,9 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
-  const [mustChangePassword, setMustChangePassword] = useState(false); // <<< NUEVO
+  const [mustChangePassword, setMustChangePassword] = useState(false);
 
+  // Carga inicial
   useEffect(() => {
     (async () => {
       try {
@@ -36,7 +37,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(me.user ?? null);
         setMustChangePassword(Boolean(me.user?.mustChangePassword));
       } catch (e) {
-        // Si el backend bloquea /auth/me con 403 + reason MUST_CHANGE_PASSWORD
         if (e instanceof HTTPError && e.status === 403 && e.data?.reason === 'MUST_CHANGE_PASSWORD') {
           setUser(null);
           setMustChangePassword(true);
@@ -57,7 +57,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     if (!resp.ok || !resp.user) throw new Error('Credenciales inválidas');
     setUser(resp.user);
-    setMustChangePassword(Boolean(resp.user.mustChangePassword)); // <<< NUEVO
+    setMustChangePassword(Boolean(resp.user.mustChangePassword));
     return resp.user;
   }
 
@@ -87,9 +87,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider
-      value={{ user, loading, mustChangePassword, login, logout, refresh }}
-    >
+    <AuthContext.Provider value={{ user, loading, mustChangePassword, login, logout, refresh }}>
       {children}
     </AuthContext.Provider>
   );

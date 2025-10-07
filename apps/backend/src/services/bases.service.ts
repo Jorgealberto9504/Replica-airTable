@@ -1,4 +1,3 @@
-// apps/backend/src/services/bases.service.ts
 import { prisma } from './db.js';
 import type { BaseVisibility } from '@prisma/client';
 import { Prisma } from '@prisma/client';
@@ -558,4 +557,71 @@ export async function purgeTrashedBasesOlderThan(days: number = 30) {
     await tx.tableDef.deleteMany({ where: { baseId: { in: ids } } });
     await tx.base.deleteMany({ where: { id: { in: ids } } });
   });
+}
+
+/* ===========================
+   NUEVO: Búsqueda paginada (sin migraciones)
+   =========================== */
+export async function searchBasesPaged(params: {
+  viewerId: number;
+  isSysadmin: boolean;
+  q?: string;
+  page: number;      // 1-based
+  pageSize: number;  // <= 100
+}) {
+  const { viewerId, isSysadmin, q, page, pageSize } = params;
+  const skip = (page - 1) * pageSize;
+
+  const where: Prisma.BaseWhereInput = {
+    isTrashed: false,
+    ...(isSysadmin
+      ? {}
+      : {
+          OR: [
+            { visibility: 'PUBLIC' },
+            { ownerId: viewerId },
+            { members: { some: { userId: viewerId } } },
+          ],
+        }),
+    ...(q ? { name: { contains: q, mode: 'insensitive' } } : {}),
+  };
+
+  const [total, rows] = await Promise.all([
+    prisma.base.count({ where }),
+    prisma.base.findMany({
+      where,
+      orderBy: [{ id: 'asc' }],
+      skip,
+      take: pageSize,
+      select: {
+        id: true,
+        name: true,
+        visibility: true,
+        ownerId: true,
+        workspaceId: true,
+        createdAt: true,
+        updatedAt: true,
+        isTrashed: true,
+        trashedAt: true,
+        owner: { select: { id: true, fullName: true, email: true } },
+        ...(isSysadmin
+          ? {}
+          : {
+              members: {
+                where: { userId: viewerId },
+                select: { role: true },
+                take: 1,
+              },
+            }),
+      },
+    }),
+  ]);
+
+  const bases = rows.map((b: any) => ({
+    ...b,
+    membershipRole: isSysadmin ? null : b.members?.[0]?.role ?? null,
+    ...(isSysadmin ? {} : { members: undefined as any }),
+  }));
+
+  return { bases, total };
 }

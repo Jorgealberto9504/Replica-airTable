@@ -1,3 +1,4 @@
+// apps/backend/src/services/tables.service.ts
 import { prisma, prismaDirect } from './db.js';
 import { Prisma } from '@prisma/client';
 import type { Prisma as P, TableDef } from '@prisma/client';
@@ -64,19 +65,43 @@ async function getNextPosition(baseId: number): Promise<number> {
 /* ==========================================
    T6.9: helpers de resolución/metadata
    ========================================== */
+/** Micro-caché (in-memory) 5s para resolver defaultTableId y total de tablas */
+const _defaultTableCache = new Map<number, { id: number | null; at: number }>();
+const _tableCountCache   = new Map<number, { n: number; at: number }>();
+const TTL_MS = 5000;
+
+function clearBaseCache(baseId: number, opts?: { defaultId?: boolean; count?: boolean }) {
+  const applyDefault = opts?.defaultId ?? true;
+  const applyCount   = opts?.count ?? true;
+  if (applyDefault) _defaultTableCache.delete(baseId);
+  if (applyCount)   _tableCountCache.delete(baseId);
+}
+
 export async function getDefaultTableIdForBase(baseId: number): Promise<number | null> {
   await ensureBaseActive(baseId);
+  const now = Date.now();
+  const c = _defaultTableCache.get(baseId);
+  if (c && now - c.at < TTL_MS) return c.id;
+
   const row = await prisma.tableDef.findFirst({
     where: { baseId, isTrashed: false },
     select: { id: true },
     orderBy: [{ position: 'asc' }, { id: 'asc' }],
   });
-  return row?.id ?? null;
+  const id = row?.id ?? null;
+  _defaultTableCache.set(baseId, { id, at: now });
+  return id;
 }
 
 export async function countActiveTablesForBase(baseId: number): Promise<number> {
   await ensureBaseActive(baseId);
-  return prisma.tableDef.count({ where: { baseId, isTrashed: false } });
+  const now = Date.now();
+  const c = _tableCountCache.get(baseId);
+  if (c && now - c.at < TTL_MS) return c.n;
+
+  const n = await prisma.tableDef.count({ where: { baseId, isTrashed: false } });
+  _tableCountCache.set(baseId, { n, at: now });
+  return n;
 }
 
 /** (mock mínimo de columnas para el grid) */
@@ -109,13 +134,15 @@ export async function createTable(baseId: number, name: string): Promise<TableDT
   await ensureBaseActive(baseId);
   try {
     const position = await getNextPosition(baseId);
-    return await prisma.tableDef.create({
+    const created = await prisma.tableDef.create({
       data: { baseId, name, position },
       select: {
         id: true, baseId: true, name: true, position: true,
         createdAt: true, updatedAt: true, isTrashed: true, trashedAt: true,
       },
     });
+    clearBaseCache(baseId); // cambia cantidad y podría afectar default table
+    return created;
   } catch (e) {
     rethrowConflictIfDuplicateTable(e); // never
   }
@@ -223,6 +250,9 @@ export async function reorderTables(baseId: number, orderedIds: number[]) {
     )
   );
 
+  // Cambiar posiciones puede cambiar la "default table"
+  clearBaseCache(baseId, { defaultId: true, count: false });
+
   return { ok: true };
 }
 
@@ -237,7 +267,7 @@ export async function deleteTable(baseId: number, tableId: number): Promise<void
 
   const existing = await prisma.tableDef.findUnique({
     where: { id: tableId },
-    select: { id: true, baseId: true, isTrashed: true },
+    select: { id: true, baseId: true, isTrashed: true, position: true },
   });
   if (!existing || existing.baseId !== baseId) {
     const err: any = new Error('Tabla no encontrada'); (err as any).code = 'P2025'; err.status = 404; throw err;
@@ -248,6 +278,9 @@ export async function deleteTable(baseId: number, tableId: number): Promise<void
     where: { id: tableId },
     data: { isTrashed: true, trashedAt: new Date() },
   });
+
+  // Soft delete reduce el total y podría cambiar la default
+  clearBaseCache(baseId);
 }
 
 /* ===========================
@@ -317,7 +350,7 @@ export async function restoreTable(baseId: number, tableId: number): Promise<Tab
 
   try {
     const newPos = await getNextPosition(baseId);
-    return await prisma.tableDef.update({
+    const restored = await prisma.tableDef.update({
       where: { id: tableId },
       data: { isTrashed: false, trashedAt: null, position: newPos },
       select: {
@@ -325,6 +358,9 @@ export async function restoreTable(baseId: number, tableId: number): Promise<Tab
         createdAt: true, updatedAt: true, isTrashed: true, trashedAt: true,
       },
     });
+    // Restaurar cambia total y puede afectar default
+    clearBaseCache(baseId);
+    return restored;
   } catch (e) {
     rethrowConflictIfDuplicateTable(e); // never
   }
@@ -339,11 +375,15 @@ export async function deleteTablePermanently(baseId: number, tableId: number): P
   if (!tbl || tbl.baseId !== baseId) { const err: any = new Error('Tabla no encontrada'); err.status = 404; throw err; }
   if (!tbl.isTrashed) { const err: any = new Error('La tabla no está en la papelera.'); err.status = 400; throw err; }
   await prisma.tableDef.delete({ where: { id: tableId } });
+
+  // Cambia total pero no default (si ya estaba en papelera); aún así limpiar por seguridad
+  clearBaseCache(baseId, { count: true, defaultId: false });
 }
 
 /** Vaciar papelera de una base (borrado definitivo) */
 export async function emptyTrashForBase(baseId: number): Promise<void> {
   await prisma.tableDef.deleteMany({ where: { baseId, isTrashed: true } });
+  clearBaseCache(baseId, { count: true, defaultId: false });
 }
 
 /** Purga automática (≥ N días) */
@@ -352,6 +392,7 @@ export async function purgeTrashedTablesOlderThan(days: number = 30): Promise<vo
   await prisma.tableDef.deleteMany({
     where: { isTrashed: true, trashedAt: { lte: threshold } },
   });
+  // No toca tablas activas → no hace falta limpiar cachés.
 }
 
 /* ===== Helpers para rename de tablas al restaurar ===== */
@@ -380,18 +421,21 @@ export async function restoreAllTablesForBaseInTx(
   tx: P.TransactionClient,
   baseId: number
 ) {
+  // 1) calcular próxima posición libre
   const agg = await tx.tableDef.aggregate({
     where: { baseId, isTrashed: false },
     _max: { position: true },
   });
   let nextPos = (agg._max.position ?? 0) + 1;
 
+  // 2) traer todas las tablas en papelera (orden estable)
   const trashed = await tx.tableDef.findMany({
     where: { baseId, isTrashed: true },
     select: { id: true, name: true },
     orderBy: [{ trashedAt: 'asc' }, { id: 'asc' }],
   });
 
+  // 3) restaurar una por una, resolviendo conflictos de nombre si aparecen
   for (const t of trashed) {
     try {
       await tx.tableDef.update({
@@ -411,20 +455,27 @@ export async function restoreAllTablesForBaseInTx(
     }
   }
 
+  // 4) normalizar posiciones finales (1..n)
   const final = await tx.tableDef.findMany({
     where: { baseId, isTrashed: false },
     select: { id: true },
     orderBy: [{ position: 'asc' }, { id: 'asc' }],
   });
+
   let i = 0;
   for (const t of final) {
     i += 1;
     await tx.tableDef.update({ where: { id: t.id }, data: { position: i } });
   }
+
+  // limpiar cachés relacionadas
+  clearBaseCache(baseId);
 }
 
+/** Versión helper con transacción propia (si no estás ya dentro de una tx) */
 export async function restoreAllTablesForBase(baseId: number) {
-  return prismaDirect.$transaction(async (tx) => {
+  await prismaDirect.$transaction(async (tx) => {
     await restoreAllTablesForBaseInTx(tx, baseId);
   });
+  clearBaseCache(baseId);
 }

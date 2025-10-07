@@ -22,6 +22,9 @@ function looksStrong(pwd: string) {
   );
 }
 
+// Solo para hint visual en el formulario (validación real es del backend)
+const ALLOWED_HINT = ['mbqinc.com', 'mbqgroup.solutions', 'mbqsolutions.com'];
+
 export default function AdminRegisterModal({ open, onClose, onCreated }: Props) {
   const [email, setEmail] = useState('');
   const [fullName, setFullName] = useState('');
@@ -100,9 +103,12 @@ export default function AdminRegisterModal({ open, onClose, onCreated }: Props) 
           type="email"
           value={email}
           onChange={e => setEmail(e.target.value)}
-          placeholder="nombre@mbqinc.com"
+          placeholder={`nombre@${ALLOWED_HINT[0]}`}
           required
         />
+        <div className="muted text-sm mt-1">
+          Dominios permitidos: {ALLOWED_HINT.join(', ')}
+        </div>
 
         <label className="label">Contraseña temporal</label>
         <input

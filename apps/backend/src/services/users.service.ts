@@ -29,7 +29,6 @@ export type UserAdmin = {
 /* ===========================
    CREATE (usado por /auth)
    =========================== */
-/** Alta de usuario por SYSADMIN con password temporal. */
 export async function createUserAdmin(input: {
   email: string;
   fullName: string;
@@ -67,7 +66,6 @@ export async function createUserAdmin(input: {
    =========================== */
 export type UserAdminList = UserAdmin;
 
-/** (DEPRECATED) — Usa listUsersAdmin con filtros/paginación */
 export async function listUsers(): Promise<UserAdminList[]> {
   return prisma.user.findMany({
     orderBy: { id: 'asc' },
@@ -89,11 +87,11 @@ export async function listUsers(): Promise<UserAdminList[]> {
    ============================================== */
 export async function listUsersAdmin(params: {
   q?: string;
-  role?: PlatformRole;          // 'USER' | 'SYSADMIN'
+  role?: PlatformRole;
   isActive?: boolean;
   canCreateBases?: boolean;
-  page?: number;                // 1-based
-  limit?: number;               // máx 200
+  page?: number;
+  limit?: number;
 }) {
   const page = params.page && params.page > 0 ? params.page : 1;
   const limit = params.limit && params.limit > 0 ? Math.min(params.limit, 200) : 20;
@@ -117,7 +115,7 @@ export async function listUsersAdmin(params: {
     prisma.user.count({ where }),
     prisma.user.findMany({
       where,
-      orderBy: [{ platformRole: 'desc' }, { id: 'asc' }], // SYSADMINs primero
+      orderBy: [{ platformRole: 'desc' }, { id: 'asc' }],
       skip,
       take: limit,
       select: {
@@ -162,14 +160,12 @@ export async function getUserByIdAdmin(id: number): Promise<UserAdmin | null> {
 }
 
 /* =================================================
-   ADMIN: Update (con protección “último SYSADMIN”)
+   ADMIN: Update (protege “último SYSADMIN”)
    ================================================= */
-async function ensureNotLeavingZeroSysadmins(targetUserId: number, patch: {
-  platformRole?: PlatformRole;
-  isActive?: boolean;
-}) {
-  // Si vamos a desactivar o degradar a este usuario Y es SYSADMIN,
-  // debemos asegurar que quede al menos otro SYSADMIN activo.
+async function ensureNotLeavingZeroSysadmins(
+  targetUserId: number,
+  patch: { platformRole?: PlatformRole; isActive?: boolean }
+) {
   if (patch.platformRole === undefined && patch.isActive === undefined) return;
 
   const current = await prisma.user.findUnique({
@@ -186,10 +182,8 @@ async function ensureNotLeavingZeroSysadmins(targetUserId: number, patch: {
     (patch.platformRole ?? current.platformRole) === 'SYSADMIN' &&
     (patch.isActive ?? current.isActive) === true;
 
-  // Si después del patch sigue siendo SYSADMIN activo, no hay problema.
   if (willBeSysadmin) return;
 
-  // Si después del patch DEJA de ser SYSADMIN activo, contemos si hay otros.
   const otherSysadmins = await prisma.user.count({
     where: {
       id: { not: targetUserId },
@@ -257,9 +251,9 @@ export async function resetUserPasswordAdmin(
     where: { id: userId },
     data: {
       passwordHash,
-      mustChangePassword: true,      // fuerza cambio en siguiente login
-      passwordUpdatedAt: new Date(), // marca timestamp
-      isActive: true,                // opcional: garantizar que quede activo
+      mustChangePassword: true,
+      passwordUpdatedAt: new Date(),
+      isActive: true,
     },
     select: {
       id: true,
@@ -279,7 +273,6 @@ export async function resetUserPasswordAdmin(
 /* ===========================
    ADMIN: Compat antiguos
    =========================== */
-/** Otorga o quita el permiso global de "crear bases" a un usuario. */
 export async function setUserCanCreateBases(userId: number, can: boolean): Promise<UserAdmin> {
   return prisma.user.update({
     where: { id: userId },
@@ -297,7 +290,6 @@ export async function setUserCanCreateBases(userId: number, can: boolean): Promi
   });
 }
 
-/** Busca un usuario por email (normalizado) para validar duplicados. */
 export async function findUserByEmail(emailRaw: string) {
   const email = emailRaw.trim().toLowerCase();
   return prisma.user.findUnique({
@@ -306,7 +298,6 @@ export async function findUserByEmail(emailRaw: string) {
   });
 }
 
-/** Datos mínimos para login (incluye hash). */
 export async function getUserForLogin(emailRaw: string) {
   const email = emailRaw.trim().toLowerCase();
   return prisma.user.findUnique({
@@ -324,7 +315,6 @@ export async function getUserForLogin(emailRaw: string) {
   });
 }
 
-/** Detecta error de constraint única (email) en Prisma. */
 export function isUniqueEmailError(e: unknown): boolean {
   return e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002';
 }

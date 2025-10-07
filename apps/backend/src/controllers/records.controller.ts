@@ -1,5 +1,4 @@
 // apps/backend/src/controllers/records.controller.ts
-
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import {
@@ -7,6 +6,8 @@ import {
   createRecordSvc,
   patchRecordSvc,
   deleteRecordSvc,
+  // NEW
+  queryRecordsSvc,
   // trash
   listTrashedRecordsForTableSvc,
   restoreRecordSvc,
@@ -34,6 +35,58 @@ const patchRecordSchema = z.object({
   values: valuesSchema,
 });
 
+/* ========= Filtros (tipo Airtable) =========
+   Árbol recursivo:
+   - Condición: { kind:'cond', fieldId:number, op:string, value?:any, values?:any[] }
+   - Grupo:     { kind:'group', logic:'AND'|'OR', filters: FilterNode[] }
+*/
+type LogicOp = 'AND' | 'OR';
+
+const filterCondSchema = z.object({
+  kind: z.literal('cond'),
+  fieldId: z.coerce.number().int().min(1),
+  op: z.string().min(1),            // validaremos por tipo en el servicio
+  value: z.any().optional(),        // para eq, contains, gt, on, etc.
+  values: z.array(z.any()).optional(), // para between/multi-select (arrays)
+});
+type FilterCond = z.infer<typeof filterCondSchema>;
+
+type FilterNode = FilterCond | FilterGroup;
+type FilterGroup = {
+  kind: 'group';
+  logic: LogicOp;
+  filters: FilterNode[];
+};
+
+const filterNodeSchema: z.ZodType<FilterNode> = z.lazy(() =>
+  z.union([
+    filterCondSchema,
+    z.object({
+      kind: z.literal('group'),
+      logic: z.enum(['AND', 'OR']),
+      filters: z.array(filterNodeSchema).default([]),
+    }),
+  ])
+);
+
+/* ========= Sort (estilo Airtable) ========= */
+const sortItemSchema = z.object({
+  kind: z.literal('field'),
+  fieldId: z.coerce.number().int().min(1),
+  dir: z.enum(['asc', 'desc']),
+  nulls: z.enum(['first', 'last']).optional(), // default "last"
+});
+
+const queryBodySchema = z.object({
+  all: z.coerce.boolean().optional().default(true),          // si true, ignora paginación
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(500).optional(),
+  // top-level puede venir como lista + lógica (igual que Airtable)
+  logic: z.enum(['AND', 'OR']).optional().default('AND'),
+  filters: z.array(filterNodeSchema).optional().default([]),
+  sort: z.array(sortItemSchema).optional().default([]),
+});
+
 /* ========== CRUD RECORDS ========== */
 
 export async function listRecords(req: Request, res: Response, next: NextFunction) {
@@ -51,7 +104,6 @@ export async function listRecords(req: Request, res: Response, next: NextFunctio
       effectivePage,
       effectiveSize
     );
-    // records ahora puede incluir opcionalmente { lastChange }
     res.json({ ok: true, total, records });
   } catch (e) { next(e); }
 }
@@ -90,6 +142,31 @@ export async function deleteRecord(req: Request, res: Response, next: NextFuncti
 
     await deleteRecordSvc(baseId, tableId, recordId, userId);
     res.json({ ok: true });
+  } catch (e) { next(e); }
+}
+
+/* ========== QUERY (filtros + ordenamiento en TODA la tabla) ========== */
+export async function queryRecords(req: Request, res: Response, next: NextFunction) {
+  try {
+    const baseId = Number(req.params.baseId);
+    const tableId = Number(req.params.tableId);
+
+    const body = queryBodySchema.parse(req.body);
+    const group: FilterGroup = { kind: 'group', logic: body.logic, filters: body.filters };
+
+    const useAll = body.all ?? true;
+    const page = useAll ? undefined : (body.page ?? 1);
+    const pageSize = useAll ? undefined : (body.pageSize ?? 50);
+
+    const { total, records } = await queryRecordsSvc(
+      baseId,
+      tableId,
+      group,
+      page,
+      pageSize,
+      body.sort
+    );
+    res.json({ ok: true, total, records });
   } catch (e) { next(e); }
 }
 
