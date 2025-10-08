@@ -1,4 +1,3 @@
-// apps/frontend/src/pages/BaseView.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
@@ -7,7 +6,7 @@ import MembersModal from './components/MembersModal';
 import TabsBar from './components/TabsBar';
 
 import { useAuth } from '../auth/AuthContext';
-import { getBaseDetail, resolveBase, type BaseVisibility } from '../api/bases';
+import { getBaseDetail, type BaseVisibility } from '../api/bases';
 
 import {
   listTabs,
@@ -16,11 +15,17 @@ import {
   renameTable,
   trashTable,
   type TabItem,
-  getTableMeta,
-  type GridColumnMeta,
 } from '../api/tables';
 
 import { confirmToast } from '../ui/confirmToast';
+import TableGrid from '../components/grid/TableGrid';
+
+type RecordPerms = {
+  canCreate: boolean;
+  canUpdate: boolean;
+  canDelete: boolean;
+  canComment: boolean;
+};
 
 export default function BaseView() {
   const nav = useNavigate();
@@ -36,14 +41,15 @@ export default function BaseView() {
 
   const [tabs, setTabs] = useState<TabItem[]>([]);
   const [loadingTabs, setLoadingTabs] = useState(false);
-  const [resolving, setResolving] = useState(false);
 
-  const [gridMeta, setGridMeta] = useState<any>(null);
+  const [canManage, setCanManage] = useState(false); // schema:manage
 
-  const [cols, setCols] = useState<GridColumnMeta[]>([]);
-  const [loadingCols, setLoadingCols] = useState(false);
-
-  const [canManage, setCanManage] = useState(false);
+  const [recordPerms, setRecordPerms] = useState<RecordPerms>({
+    canCreate: false,
+    canUpdate: false,
+    canDelete: false,
+    canComment: false,
+  });
 
   const [openMembers, setOpenMembers] = useState(false);
 
@@ -58,10 +64,30 @@ export default function BaseView() {
       setBaseName(d.base.name);
       setVisibility(d.base.visibility);
       setOwnerName(d.base.owner?.fullName);
+
       const isAdmin = me?.platformRole === 'SYSADMIN';
       const isOwner = d.base.ownerId === me?.id;
-      const hasPerm = Boolean((d as any).permissions?.schemaManage);
-      setCanManage(Boolean(isAdmin || isOwner || hasPerm));
+
+      const role = (d as any).membershipRole as ('VIEWER' | 'COMMENTER' | 'EDITOR' | null | undefined);
+      const perms = (d as any).permissions ?? {};
+
+      const schemaManage = Boolean(isAdmin || isOwner || perms.schemaManage === true);
+      setCanManage(schemaManage);
+
+      // Para registros, habilitamos por cualquiera de estas condiciones:
+      const canUpd = Boolean(isAdmin || isOwner || role === 'EDITOR' || perms.recordsUpdate === true);
+      const canCre = Boolean(isAdmin || isOwner || role === 'EDITOR' || perms.recordsCreate === true);
+      const canDel = Boolean(isAdmin || isOwner || role === 'EDITOR' || perms.recordsDelete === true);
+      const canCom = Boolean(
+        isAdmin || isOwner || role === 'EDITOR' || role === 'COMMENTER' || perms.commentsCreate === true
+      );
+
+      setRecordPerms({
+        canCreate: canCre,
+        canUpdate: canUpd,
+        canDelete: canDel,
+        canComment: canCom,
+      });
     })();
   }, [baseId, me?.id, me?.platformRole]);
 
@@ -74,31 +100,23 @@ export default function BaseView() {
       setLoadingTabs(false);
     }
   }
-  useEffect(() => { refreshTabs(); /* eslint-disable-next-line */ }, [baseId]);
-
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!baseId || urlTableId != null) return;
-      setResolving(true);
-      try {
-        const r = await resolveBase(baseId);
-        if (cancelled) return;
-        setGridMeta(r.gridMeta ?? null);
-        if (r.defaultTableId) {
-          nav(`/bases/${baseId}/t/${r.defaultTableId}`, { replace: true });
-        }
-      } finally {
-        if (!cancelled) setResolving(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [baseId, urlTableId, nav]);
+    if (!Number.isFinite(baseId)) return;
+    refreshTabs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseId]);
 
   const sortedTabs = useMemo(
     () => [...tabs].sort((a, b) => a.position - b.position),
     [tabs]
   );
+
+  useEffect(() => {
+    if (!loadingTabs && !urlTableId && sortedTabs.length > 0) {
+      nav(`/bases/${baseId}/t/${sortedTabs[0].id}`, { replace: true });
+    }
+  }, [loadingTabs, urlTableId, sortedTabs, baseId, nav]);
+
   useEffect(() => {
     if (!loadingTabs && urlTableId && sortedTabs.length) {
       const exists = sortedTabs.some(t => t.id === urlTableId);
@@ -108,34 +126,23 @@ export default function BaseView() {
     }
   }, [loadingTabs, urlTableId, sortedTabs, baseId, nav]);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!urlTableId) { setCols([]); return; }
-      setLoadingCols(true);
-      try {
-        const r = await getTableMeta(baseId, urlTableId);
-        if (!cancelled) {
-          const ordered = (r.meta?.columns ?? []).slice().sort((a, b) => (a.position ?? 1e9) - (b.position ?? 1e9));
-          setCols(ordered);
-        }
-      } finally {
-        if (!cancelled) setLoadingCols(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [baseId, urlTableId]);
-
   function handleSelect(tableId: number) {
     if (tableId !== urlTableId) nav(`/bases/${baseId}/t/${tableId}`);
   }
-  function handleOpenCreate() { setFormName(''); setFormErr(''); setOpenCreate(true); }
+
+  function handleOpenCreate() {
+    setFormName('');
+    setFormErr('');
+    setOpenCreate(true);
+  }
+
   function handleOpenRename(tableId: number) {
     const t = tabs.find(x => x.id === tableId);
     setFormName(t?.name ?? '');
     setFormErr('');
     setOpenRename({ open: true, id: tableId });
   }
+
   async function handleTrash(tableId: number) {
     const t = tabs.find(x => x.id === tableId);
     const ok = await confirmToast({
@@ -149,16 +156,18 @@ export default function BaseView() {
 
     try {
       await trashTable(baseId, tableId);
-      await refreshTabs();
+      const r = await listTabs(baseId);
+      setTabs(r.tabs);
+      const next = r.tabs.slice().sort((a, b) => a.position - b.position);
       if (urlTableId === tableId) {
-        const r = await resolveBase(baseId);
-        if (r.defaultTableId) nav(`/bases/${baseId}/t/${r.defaultTableId}`, { replace: true });
+        if (next.length) nav(`/bases/${baseId}/t/${next[0].id}`, { replace: true });
         else nav(`/bases/${baseId}`, { replace: true });
       }
     } catch (e: any) {
       alert(e?.message ?? 'No se pudo enviar la tabla a la papelera');
     }
   }
+
   async function handleReorder(orderedIds: number[]) {
     const map = new Map(tabs.map((t) => [t.id, t]));
     const next = orderedIds.map((id, i) => ({ ...(map.get(id)!), position: i + 1 }));
@@ -216,7 +225,8 @@ export default function BaseView() {
   return (
     <>
       <Header user={me ?? undefined} onLogout={logout} />
-      <main className="content">
+      {/* 👇 ancho completo para esta página */}
+      <main className="content content--wide">
         <div className="flex items-center gap-3 mb-3">
           <h1 className="m-0 text-2xl font-extrabold">{baseName}</h1>
           <span className="badge badge-green">
@@ -238,7 +248,7 @@ export default function BaseView() {
           onReorder={canManage ? handleReorder : undefined}
         />
 
-        {loadingTabs || resolving ? (
+        {loadingTabs ? (
           <div className="card mt-4 text-slate-500">Cargando…</div>
         ) : sortedTabs.length === 0 ? (
           <div className="card mt-4">
@@ -246,34 +256,13 @@ export default function BaseView() {
             <div className="muted">El propietario aún no ha creado tablas.</div>
           </div>
         ) : currentTab ? (
-          <div className="card mt-4">
-            <div className="mb-2">
-              Vista de tabla <b>{currentTab.name}</b>
-              {gridMeta?.totalTables != null && (
-                <span className="muted ml-2">
-                  (Meta: {gridMeta.totalTables} tablas en total)
-                </span>
-              )}
-            </div>
-
-            {loadingCols ? (
-              <div className="muted">Cargando columnas…</div>
-            ) : cols.length === 0 ? (
-              <div className="muted">Aún no hay columnas definidas.</div>
-            ) : (
-              <div className="grid grid-flow-col auto-cols-min gap-2 overflow-x-auto pb-1 border-b border-slate-200">
-                {cols.map(c => (
-                  <div
-                    key={c.id}
-                    className="chip font-extrabold bg-slate-50 border border-slate-200"
-                    style={{ minWidth: (c.width ?? 140) }}
-                    title={`${c.label} (${c.type})`}
-                  >
-                    {c.label}
-                  </div>
-                ))}
-              </div>
-            )}
+          <div className="mt-4">
+            <TableGrid
+              baseId={baseId}
+              tableId={currentTab.id}
+              perms={recordPerms}
+              canManageFields={canManage}
+            />
           </div>
         ) : (
           <div className="card mt-4">Normalizando selección…</div>

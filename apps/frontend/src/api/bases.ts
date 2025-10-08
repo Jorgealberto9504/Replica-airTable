@@ -1,3 +1,4 @@
+// apps/frontend/src/api/bases.ts
 import { getJSON, API_URL } from './http';
 
 export type BaseVisibility = 'PUBLIC' | 'PRIVATE' | 'SHARED';
@@ -15,6 +16,24 @@ export type BaseDetail = {
   updatedAt?: string;
 };
 
+/** Permisos opcionales por acción que puede enviar el backend junto con el detail */
+export type BasePermissions = {
+  schemaManage?: boolean;
+  recordsRead?: boolean;
+  recordsCreate?: boolean;
+  recordsUpdate?: boolean;
+  recordsDelete?: boolean;
+  commentsCreate?: boolean;
+};
+
+/** Respuesta de detail con info de membresía/permisos (backwards compatible) */
+export type GetBaseDetailResp = {
+  ok: boolean;
+  base: BaseDetail;
+  membershipRole?: 'VIEWER' | 'COMMENTER' | 'EDITOR' | null;
+  permissions?: BasePermissions;
+};
+
 export type BaseListItem = {
   id: number;
   name: string;
@@ -30,7 +49,8 @@ export type BaseListItem = {
 
 /* ========= DETAIL ========= */
 export function getBaseDetail(baseId: number) {
-  return getJSON<{ ok: boolean; base: BaseDetail }>(`/bases/${baseId}`);
+  // Si el backend no envía membershipRole/permissions, quedarán undefined.
+  return getJSON<GetBaseDetailResp>(`/bases/${baseId}`);
 }
 
 /* ========= RESOLVE (default table + metadatos grid) ========= */
@@ -39,6 +59,9 @@ export type ResolveBaseResp = {
   base: BaseDetail;
   defaultTableId: number | null;
   gridMeta?: { totalTables?: number; columns?: any[] };
+  // Opcionales si el backend decide enviarlos también aquí
+  membershipRole?: 'VIEWER' | 'COMMENTER' | 'EDITOR' | null;
+  permissions?: BasePermissions;
 };
 
 export function resolveBase(baseId: number) {

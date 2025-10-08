@@ -20,8 +20,7 @@ import {
   emptyTrashForBase,
   // Papelera GLOBAL (admin)
   listTrashedTablesForAdmin,
-  // Meta de grid
-  getGridMetaForTable,
+
 } from '../services/tables.service.js';
 import { logAudit } from '../services/audit.service.js';
 import { prisma } from '../services/db.js';
@@ -174,21 +173,6 @@ export async function getTableCtrl(req: Request, res: Response) {
   }
 }
 
-/** GET /bases/:baseId/tables/:tableId/meta */
-export async function getTableMetaCtrl(req: Request, res: Response) {
-  try {
-    const me = getAuthUser<{ id: number }>(req);
-    if (!me) return res.status(401).json({ ok: false, error: 'No autenticado' });
-
-    const baseId = parseBaseId(req);
-    const tableId = parseTableId(req);
-
-    const meta = await getGridMetaForTable(baseId, tableId);
-    return res.json({ ok: true, meta });
-  } catch (e: any) {
-    return res.status(e?.status ?? 500).json({ ok: false, error: e?.message ?? 'No se pudo obtener metadatos' });
-  }
-}
 
 export async function updateTableCtrl(req: Request, res: Response) {
   try {

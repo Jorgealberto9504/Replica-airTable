@@ -104,28 +104,7 @@ export async function countActiveTablesForBase(baseId: number): Promise<number> 
   return n;
 }
 
-/** (mock mínimo de columnas para el grid) */
-export async function getGridMetaForTable(baseId: number, tableId: number) {
-  await ensureBaseActive(baseId);
 
-  const tbl = await prisma.tableDef.findUnique({
-    where: { id: tableId },
-    select: { id: true, baseId: true, isTrashed: true },
-  });
-  if (!tbl || tbl.baseId !== baseId || tbl.isTrashed) {
-    const err: any = new Error('Tabla no encontrada');
-    err.status = 404;
-    throw err;
-  }
-
-  const columns = [
-    { id: 'name',      key: 'name',      label: 'Nombre',       type: 'TEXT',     width: 220, position: 1 },
-    { id: 'createdAt', key: 'createdAt', label: 'Creado',       type: 'DATETIME', width: 160, position: 2 },
-    { id: 'updatedAt', key: 'updatedAt', label: 'Actualizado',  type: 'DATETIME', width: 160, position: 3 },
-  ];
-
-  return { columns };
-}
 
 /* ==========================================
    CRUD de tablas

@@ -1,7 +1,6 @@
-// apps/backend/src/routes/fields.routes.ts
-
 import { Router } from 'express';
 import { requireAuth } from '../middlewares/auth.middleware.js';
+import { guard } from '../permissions/guard.js';
 import {
   // fields
   listFields,
@@ -28,26 +27,32 @@ const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
 /* FIELDS (dentro de una tabla) */
-router.get('/', listFields);                     // GET    /bases/:baseId/tables/:tableId/fields
-router.post('/', createField);                   // POST   /bases/:baseId/tables/:tableId/fields
-router.patch('/:fieldId', updateField);          // PATCH  /bases/:baseId/tables/:tableId/fields/:fieldId
-router.delete('/:fieldId', deleteField);         // DELETE /bases/:baseId/tables/:tableId/fields/:fieldId (soft)
+// Lectura del esquema: cualquiera que pueda ver la base
+router.get('/',                        guard('base:view'),      listFields);
 
-router.post('/:fieldId/restore', restoreField);  // POST   /.../fields/:fieldId/restore
-router.delete('/:fieldId/permanent', deleteFieldPermanent); // DELETE /.../fields/:fieldId/permanent
+// Mutaciones de esquema: SOLO owner (o SYSADMIN)
+router.post('/',                       guard('schema:manage'),  createField);
+router.patch('/:fieldId',              guard('schema:manage'),  updateField);
+router.delete('/:fieldId',             guard('schema:manage'),  deleteField);
 
-router.get('/trash', listTrashedFields);         // GET    /.../fields/trash
-router.post('/trash/empty', emptyFieldTrash);    // POST   /.../fields/trash/empty
-router.post('/trash/purge', purgeFieldTrash);    // POST   /.../fields/trash/purge?days=30
+router.post('/:fieldId/restore',       guard('schema:manage'),  restoreField);
+router.delete('/:fieldId/permanent',   guard('schema:manage'),  deleteFieldPermanent);
+
+router.get('/trash',                   guard('schema:manage'),  listTrashedFields);
+router.post('/trash/empty',            guard('schema:manage'),  emptyFieldTrash);
+router.post('/trash/purge',            guard('schema:manage'),  purgeFieldTrash);
 
 /* OPTIONS (para fieldId) */
-router.get('/:fieldId/options', listOptions);                         // GET    /.../fields/:fieldId/options
-router.get('/:fieldId/options/trash', listTrashedOptions);            // GET    /.../fields/:fieldId/options/trash
-router.post('/:fieldId/options', createOption);                       // POST   /.../fields/:fieldId/options
-router.patch('/:fieldId/options/reorder', reorderOptions);            // PATCH  /.../fields/:fieldId/options/reorder
-router.patch('/:fieldId/options/:optionId', updateOption);            // PATCH  /.../fields/:fieldId/options/:optionId
-router.delete('/:fieldId/options/:optionId', deleteOption);           // DELETE /.../fields/:fieldId/options/:optionId (soft)
-router.post('/:fieldId/options/:optionId/restore', restoreOption);    // POST   /.../fields/:fieldId/options/:optionId/restore
-router.delete('/:fieldId/options/:optionId/permanent', deleteOptionPermanent); // DELETE permanente
+// Ver opciones: con ver la base alcanza
+router.get('/:fieldId/options',                    guard('base:view'),     listOptions);
+router.get('/:fieldId/options/trash',              guard('schema:manage'), listTrashedOptions);
+
+// Mutaciones de opciones: SOLO owner (o SYSADMIN)
+router.post('/:fieldId/options',                   guard('schema:manage'), createOption);
+router.patch('/:fieldId/options/reorder',          guard('schema:manage'), reorderOptions);
+router.patch('/:fieldId/options/:optionId',        guard('schema:manage'), updateOption);
+router.delete('/:fieldId/options/:optionId',       guard('schema:manage'), deleteOption);
+router.post('/:fieldId/options/:optionId/restore', guard('schema:manage'), restoreOption);
+router.delete('/:fieldId/options/:optionId/permanent', guard('schema:manage'), deleteOptionPermanent);
 
 export default router;

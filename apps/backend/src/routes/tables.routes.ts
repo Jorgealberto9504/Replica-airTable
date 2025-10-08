@@ -14,7 +14,7 @@ import {
   listTablesNavCtrl,
   reorderTablesCtrl,
   // META GRID
-  getTableMetaCtrl,
+
   // PAPELERA (OWNER)
   listTrashedTablesCtrl,
   restoreTableCtrl,
@@ -80,8 +80,6 @@ router.get('/:baseId/tables', requireAuth, guard('base:view'), listTablesCtrl);
 router.get('/:baseId/tables/nav', requireAuth, guard('base:view'), listTablesNavCtrl);
 router.patch('/:baseId/tables/reorder', requireAuth, guard('schema:manage'), reorderTablesCtrl);
 
-// META (estructura de columnas del grid)
-router.get('/:baseId/tables/:tableId/meta', requireAuth, guard('base:view'), getTableMetaCtrl);
 
 // CRUD single
 router.get('/:baseId/tables/:tableId', requireAuth, guard('base:view'), getTableCtrl);

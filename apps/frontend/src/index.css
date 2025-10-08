@@ -1,5 +1,3 @@
-/* apps/frontend/src/index.css */
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -41,6 +39,13 @@
     --accent-100:#f2f8fc;
     --tabs-bg:#ffffff;
     --tabs-hover:#f7f9fc;
+
+    /* ====== GRID VARS (Airtable-like) ====== */
+    --grid-id-w: 80px;
+    --grid-min-col: 180px;
+    --grid-actions-w: 72px;  /* ancho col acciones (derecha) */
+    --grid-addcol-w: 220px;  /* ancho col “Agregar columna” (derecha) */
+    --grid-row-h: 40px;
   }
 
   html, body, #root { height: 100%; }
@@ -52,10 +57,9 @@
 }
 
 /* =========================================
-   COMPONENTES REUTILIZABLES
+   COMPONENTES REUTILIZABLES / TABS / ETC
    ========================================= */
 @layer components {
-  /* ===== Botones ===== */
   .btn { @apply inline-flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-100 font-semibold text-slate-900 transition hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed; }
   .btn-primary { @apply btn border-0 text-white; background: linear-gradient(135deg, var(--mbq-grad-from), var(--mbq-grad-to)); }
   .btn-secondary { @apply btn bg-white; }
@@ -65,30 +69,30 @@
   .badge { @apply inline-flex items-center rounded-full px-2 py-1 text-xs font-bold; }
   .badge-green { @apply bg-emerald-50 text-emerald-700; }
 
-  /* ===== Inputs / labels ===== */
   .label   { @apply text-sm text-slate-500; }
   .input   { @apply w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-cyan-300 focus:border-cyan-400; }
   .select  { @apply rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none; }
   .checkbox{ @apply inline-flex items-center gap-2; }
   .field   { @apply grid gap-1.5; }
 
-  /* ===== Tarjetas / Helpers ===== */
-  .card            { @apply bg-white rounded-2xl border border-slate-200 shadow-lg p-6 w-full max-w-md; }
-  /* Aumentamos el peso/tamaño para títulos de página como “Bases” */
+  .card            { @apply bg-white rounded-2xl border border-slate-200 shadow-lg p-6 w-full; }
+  .card--compact   { @apply p-4; }
+
   .section-title   { @apply text-[22px] sm:text-[24px] font-extrabold text-slate-900; }
   .aside-title     { @apply text-xs font-bold uppercase tracking-wider text-slate-600 px-3 py-2; }
   .container-padded{ @apply max-w-7xl mx-auto px-4; }
-  .content         { @apply max-w-6xl mx-auto px-4 py-4; }
+  .content         { @apply max-w-7xl mx-auto px-4 py-4; }
   .page-center     { @apply min-h-full grid place-items-center p-6; }
   .muted           { @apply text-slate-500; }
   .main-wrap       { @apply flex min-h-[calc(100vh-70px)] bg-slate-50; }
 
-  /* ===== Alerts ===== */
   .alert       { @apply rounded-lg px-3 py-2 text-sm mb-2; }
   .alert-error { @apply alert bg-red-100 text-red-700 border border-red-200; }
   .alert-info  { @apply alert bg-blue-50 text-blue-700 border border-blue-200; }
+  .alert-success { @apply alert bg-emerald-100 text-emerald-700 border border-emerald-200; }
+  .alert.success { @apply bg-emerald-100 text-emerald-700 border border-emerald-200; }
+  .alert.error   { @apply bg-red-100 text-red-700 border border-red-200; }
 
-  /* ===== Topbar / Header ===== */
   .topbar        { @apply sticky top-0 z-10 flex items-center justify-between bg-white border-b border-slate-200 px-6 py-4; }
   .brand-logo    { height: var(--logo-nav-size); width: auto; display: block; }
   .brand-link    { @apply flex items-center gap-2 no-underline; }
@@ -104,11 +108,9 @@
   .menu-item        { @apply w-full text-left bg-white px-3 py-2 rounded-lg cursor-pointer font-semibold hover:bg-slate-100; }
   .menu-item-eliminar { @apply w-full text-left bg-white px-3 py-2 rounded-lg cursor-pointer font-semibold text-red-700 hover:bg-slate-100; }
 
-  /* ===== Sidebar Workspaces ===== */
   .menu-item-danger{ @apply w-full text-left bg-white px-3 py-2 rounded-lg cursor-pointer font-semibold text-red-700 hover:bg-slate-100; }
   .ws-sidebar { @apply w-[260px] flex flex-col bg-white border-r border-slate-200; }
 
-  /* ===== Listas y tarjetas (Bases / Users) ===== */
   .list-toolbar    { @apply flex items-center justify-between gap-3 my-4; }
   .toolbar-right   { @apply flex items-center gap-2; }
   .bases-grid      { @apply grid gap-3; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
@@ -120,15 +122,12 @@
   .icon-btn        { @apply border border-slate-200 bg-slate-50 rounded-md px-2 py-1 cursor-pointer hover:bg-slate-100; }
   .pagination      { @apply my-4 flex items-center justify-center gap-2; }
 
-  /* Pills visibilidad */
   .pill-green { @apply bg-emerald-600 text-white px-2 py-0.5 rounded-full text-[11px] font-bold; }
   .pill-gray  { @apply bg-slate-400  text-white px-2 py-0.5 rounded-full text-[11px] font-bold; }
 
-  /* ===== Chips (tabs simples y tags de columnas) ===== */
   .chip { @apply inline-flex items-center px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-sm font-semibold; min-width: var(--mw, 140px); }
   .chip[aria-pressed="true"] { @apply bg-slate-100 border-slate-300; }
 
-  /* ===== Modal genérico ===== */
   .modal-overlay,
   .modal-backdrop { @apply fixed inset-0 grid place-items-center p-4 bg-black/35 z-[1000]; }
   .modal-card   { @apply w-[680px] max-w-[95vw] bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden; }
@@ -137,149 +136,119 @@
   .modal-body   { @apply p-4; }
   .modal-close  { @apply icon-btn; }
 
-  /* =========================================
-     Tabs estilo Airtable (TabsBar)
-     ========================================= */
+  /* Tabs */
   .tabs-wrap { @apply relative mb-3; }
-  .tabs-wrap::after {
-    content:"";
-    position:absolute; left:0; right:0; bottom:0; height:1px; background: var(--border);
-    pointer-events:none;
-  }
-
-  .tabs-scroller {
-    overflow-x: auto;
-    overflow-y: hidden;
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-    background: var(--tabs-bg);
-    border-radius: 0;
-  }
+  .tabs-wrap::after { content:""; position:absolute; left:0; right:0; bottom:0; height:1px; background: var(--border); pointer-events:none; }
+  .tabs-scroller { overflow-x: auto; overflow-y: hidden; -ms-overflow-style: none; scrollbar-width: none; background: var(--tabs-bg); }
   .tabs-scroller::-webkit-scrollbar { display: none; }
-
   .tabs-strip { @apply relative inline-flex items-center whitespace-nowrap p-0; border-bottom: 0; }
-
   .tab-slot { @apply inline-flex items-center relative; }
-
-  .tab-btn {
-    @apply relative bg-transparent text-slate-900 font-extrabold px-2.5 pr-7 py-2 rounded-t-md cursor-pointer border border-transparent;
-    border-bottom: 0;
-  }
+  .tab-btn { @apply relative bg-transparent text-slate-900 font-extrabold px-2.5 pr-7 py-2 rounded-t-md cursor-pointer border border-transparent; border-bottom: 0; }
   .tab-btn:hover { background: var(--tabs-hover); }
-
-  .tab-btn[aria-pressed="true"] {
-    background: var(--tabs-bg);
-    border: 1px solid var(--mbq-navy);
-    border-bottom: 0;
-    margin-bottom: -1px; /* oculta la línea base */
-    z-index: 2;
-  }
-
-  .tab-menu-btn {
-    @apply absolute top-1/2 -translate-y-1/2 right-1 w-[18px] h-[18px] grid place-items-center bg-transparent rounded;
-    opacity: 0; pointer-events: none;
-    color: #0f172a;
-    z-index: 3; /* encima de la pestaña activa */
-  }
+  .tab-btn[aria-pressed="true"] { background: var(--tabs-bg); border: 1px solid var(--mbq-navy); border-bottom: 0; margin-bottom: -1px; z-index: 2; }
+  .tab-menu-btn { @apply absolute top-1/2 -translate-y-1/2 right-1 w-[18px] h-[18px] grid place-items-center bg-transparent rounded; opacity: 0; pointer-events: none; color: #0f172a; z-index: 3; }
   .tab-slot.is-active .tab-menu-btn { opacity: .9; pointer-events: auto; }
   .tab-menu-btn:hover { @apply bg-black/10; }
-
   .tab-action-btn { @apply ml-2 bg-white border border-slate-200 rounded-md h-7 w-7 grid place-items-center cursor-pointer hover:bg-slate-100; }
-
-  .tabs-scroll-btn {
-    @apply absolute top-1/2 -translate-y-1/2 w-7 h-7 rounded-full border border-slate-200 bg-white shadow cursor-pointer grid place-items-center text-lg;
-    z-index: 3;
-  }
+  .tabs-scroll-btn { @apply absolute top-1/2 -translate-y-1/2 w-7 h-7 rounded-full border border-slate-200 bg-white shadow cursor-pointer grid place-items-center text-lg; z-index: 3; }
   .tabs-scroll-btn.left  { left: -6px; }
   .tabs-scroll-btn.right { right: -6px; }
 
-  /* ===== AUTH / LOGIN (se mantiene por si lo usas) ===== */
-  .auth-page {
-    @apply min-h-[100dvh] grid place-items-center p-6;
-    background: var(--bg);
-  }
-  .auth-card  {
-    @apply bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden grid;
-    width: min(980px, 96vw);
-    grid-template-columns: 44% 56%;
-  }
-  .auth-illustration {
-    @apply relative text-white p-24;
-    background: linear-gradient(160deg, var(--mbq-grad-from), var(--mbq-grad-to));
-    display: grid; grid-template-rows: auto 1fr; row-gap: 12px;
-  }
-  .auth-illustration::after{
-    content:"";
-    position:absolute; inset:-10% -10% 40% -10%;
-    background:
-      radial-gradient(120% 60% at 30% 0%, rgba(255,255,255,.20), transparent 60%),
-      radial-gradient(120% 60% at 100% 20%, rgba(255,255,255,.12), transparent 70%);
-    pointer-events:none;
-  }
+  .auth-page { @apply min-h-[100dvh] grid place-items-center p-6; background: var(--bg); }
+  .auth-card  { @apply bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden grid; width: min(980px, 96vw); grid-template-columns: 44% 56%; }
+  .auth-illustration { @apply relative text-white p-24; background: linear-gradient(160deg, var(--mbq-grad-from), var(--mbq-grad-to)); display: grid; grid-template-rows: auto 1fr; row-gap: 12px; }
+  .auth-illustration::after{ content:""; position:absolute; inset:-10% -10% 40% -10%; background: radial-gradient(120% 60% at 30% 0%, rgba(255,255,255,.20), transparent 60%), radial-gradient(120% 60% at 100% 20%, rgba(255,255,255,.12), transparent 70%); pointer-events:none; }
   .auth-logo { width: 72%; max-width: 340px; filter: drop-shadow(0 10px 30px rgba(0,0,0,.18)); }
   .auth-illu-copy h2 { @apply m-0 text-2xl font-extrabold; }
   .auth-illu-copy p  { @apply m-0 opacity-95; }
   .auth-form { @apply p-28 grid gap-3 content-start; }
   .auth-title{ @apply text-[26px] font-extrabold mb-1; }
-  @media (max-width: 900px){
-    .auth-card{ grid-template-columns: 1fr; }
-    .auth-illustration{ height: 220px; grid-template-rows: 1fr auto; }
-    .auth-logo{ width: 46%; }
+}
+
+/* ====== GRID (Airtable-like) ====== */
+@layer components {
+  .grid-card { @apply w-full bg-white border border-slate-200 rounded-2xl shadow-lg overflow-hidden; }
+  .grid-toolbar { @apply flex items-center gap-3 px-4 py-3 border-b border-slate-200 bg-slate-50; }
+
+  .grid-wrap { max-height: calc(100vh - 270px); overflow: auto; background: #fff; }
+
+  /* Header y filas usan la MISMA plantilla de columnas (inline en TSX). */
+  .grid-header { position: sticky; top: 0; z-index: 5; background: #f8fafc; }
+  .grid-row { display: grid; }
+
+  /* Separadores */
+  .grid-header .grid-th,
+  .grid-td, .grid-th { border-right: 1px solid #e5e7eb; }
+  .grid-row > * { border-bottom: 1px solid #e5e7eb; }
+
+  .grid-th, .grid-td { @apply px-3 py-2 text-sm; min-height: 40px; line-height: 1.25rem; vertical-align: middle; }
+  .grid-th { @apply font-bold text-slate-800; background: #f8fafc; }
+  .id-col { @apply text-xs text-slate-500; }
+
+  /* ===== SIN ANCLAJES ===== */
+  .frozen-left { position: static; left: auto; z-index: auto; box-shadow: none; background: inherit; }
+  .grid-header .frozen-left { background: inherit; }
+  .grid-row .frozen-left { background: inherit; }
+
+  /* “Agregar columna” y “Acciones” sin sticky */
+  .add-col   { position: static; right: auto; z-index: auto; background: inherit; border-left: 1px solid #e5e7eb; display:flex; align-items:center; justify-content:center; }
+  .add-col-cell { visibility: hidden; pointer-events: none; }
+  .actions-col { position: static; right: auto; z-index: auto; background: inherit; border-left: 1px solid #e5e7eb; text-align: center; }
+
+  /* Barra agregar fila */
+  .grid-add-row { @apply sticky bottom-0 z-10 bg-slate-50 border-t border-slate-200 p-3 flex; justify-content: flex-start; }
+
+  /* Inputs */
+  .cell-input { @apply w-full bg-transparent outline-none px-2 py-1 rounded-md border border-transparent focus:border-cyan-300 focus:ring-2 focus:ring-cyan-200; }
+
+  /* MultiSelect (botón) */
+  .ms-wrap { position: relative; }
+  .ms-input { @apply w-full text-left bg-white border border-transparent rounded-md px-2 py-1 hover:border-slate-200; }
+
+  /* Panel del MultiSelect via PORTAL (fuera del grid) */
+  .ms-portal-panel {
+    position: fixed; z-index: 2500;
+    @apply bg-white border border-slate-200 rounded-md shadow-lg p-2;
+    max-height: 260px; overflow: auto;
   }
+  .ms-row { @apply flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50; }
 
-  /* =========================================
-     EXTRAS: compatibilidad y Members (panel & modal)
-     ========================================= */
+  /* Hover + zebra */
+  .grid-row:nth-child(even) .grid-td { background: #fcfdff; }
+  .grid-row:hover .grid-td,
+  .grid-row:hover .id-col { background: #f6f9fc; transition: background-color .15s ease; }
 
-  /* Alias de compatibilidad para botones viejos que usan "btn primary"/"btn danger". */
-  .btn.primary { @apply border-0 text-white; background: linear-gradient(135deg, var(--mbq-grad-from), var(--mbq-grad-to)); }
-  .btn.danger  { @apply bg-red-50 border-red-200 text-red-900; }
+  /* Truncado */
+  .grid-td, .grid-th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-  /* Alert success + compat .alert.success */
-  .alert-success { @apply alert bg-emerald-100 text-emerald-700 border border-emerald-200; }
-  .alert.success { @apply bg-emerald-100 text-emerald-700 border border-emerald-200; }
-  .alert.error   { @apply bg-red-100 text-red-700 border border-red-200; }
+  /* Tipos */
+  .grid-td[data-type="number"],
+  .grid-td[data-type="currency"],
+  .grid-td[data-type="percent"] { text-align: right; font-variant-numeric: tabular-nums; }
+  .grid-td[data-type="checkbox"] { text-align: center; }
+  .grid-td[data-type="date"],
+  .grid-td[data-type="datetime"],
+  .grid-td[data-type="time"] { text-align: right; }
 
-  /* Members */
-  .members-panel { @apply w-[420px] p-4; }
-  .invite-row { @apply flex items-center gap-2 mb-3; }
-  .invite-row .input { @apply flex-1; }
-  .members-list { @apply grid gap-2; }
-  .member-row {
-    @apply grid items-center gap-2 p-2 border border-slate-200 rounded-lg;
-    grid-template-columns: 1fr; /* por defecto (solo lectura) */
+  /* Menú caret a la derecha + resizer */
+  .grid-th { position: relative; padding-right: 28px; }
+  .th-menu-btn{
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    @apply rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-xs cursor-pointer;
+    opacity: 0; transition: opacity .15s ease;
   }
-  .member-row.has-actions { grid-template-columns: 1fr auto auto; }
-  .member-user  { @apply min-w-0; }
-  .member-name  { @apply font-semibold truncate; }
-  .member-email { @apply text-xs text-slate-500 truncate; }
-  .member-actions { @apply flex items-center gap-2; }
-  .role-chip { @apply px-2 py-1 rounded-full bg-slate-100 text-xs font-semibold justify-self-start; }
+  .grid-th:hover .th-menu-btn{ opacity: 1; }
 
-  /* ===== Menú contextual (overlay/panel) usado por TabsBar ===== */
-  .context-overlay { position: fixed; inset: 0; background: transparent; z-index: 999; }
-  .context-panel   {
-    z-index: 1000;
-    background: #fff;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    box-shadow: 0 10px 20px rgba(0,0,0,.08);
-    width: 220px;
-    padding: 6px;
+  .col-resizer{
+    position:absolute; top:0; right:-3px; width:6px; height:100%;
+    cursor: col-resize; z-index: 20;
   }
+  .col-resizer::after{ content:""; position:absolute; top:0; bottom:0; left:2px; width:1px; background:transparent; }
+  .grid-th:hover .col-resizer::after{ background:#cfd8e3; }
+}
 
-  /* =========================================
-     ConfirmToast (opcional, versión sin inline)
-     ========================================= */
-  .toast-overlay { @apply fixed inset-0 bg-black/35 z-[5000]; }
-  .toast-card {
-    @apply fixed z-[5010] top-6 left-1/2 -translate-x-1/2 w-[calc(100%-24px)] max-w-[520px] bg-white border border-slate-200 rounded-xl shadow-2xl p-4;
-  }
-  .toast-actions { @apply mt-3 flex items-center justify-end gap-2; }
-  .toast-accent { @apply absolute left-0 top-0 bottom-0 w-1 rounded-l-xl; }
-  .toast-accent--neutral { background: #e5e7eb; }
-  .toast-accent--success { background: #10b981; }
-  .toast-accent--info    { background: #3b82f6; }
-  .toast-accent--warning { background: #f59e0b; }
-  .toast-accent--danger  { background: #ef4444; }
+/* Utilidades de ancho de contenido */
+@layer components {
+  .content--wide { @apply max-w-none; }
+  .content--edge { @apply px-0 max-w-none; }
 }

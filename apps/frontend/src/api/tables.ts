@@ -1,3 +1,4 @@
+// apps/frontend/src/api/tables.ts
 import { getJSON, postJSON, API_URL } from './http';
 
 export type TabItem = { id: number; name: string; position: number };
@@ -66,29 +67,3 @@ export async function trashTable(baseId: number, tableId: number) {
   }
   return { ok: true } as const;
 }
-
-// === META GRID (7.3.4) ===
-export type GridColumnMeta = {
-  id: string;
-  key: string;
-  label: string;
-  type: 'TEXT' | 'NUMBER' | 'DATETIME' | string;
-  width?: number;
-  position?: number;
-};
-
-export async function getTableMeta(baseId: number, tableId: number) {
-  const res = await fetch(`${API_URL}/bases/${baseId}/tables/${tableId}/meta`, {
-    credentials: 'include',
-  });
-  if (!res.ok) {
-    let msg = `Error ${res.status}`;
-    try {
-      const b = await res.json();
-      if (b?.error) msg = b.error;
-    } catch {}
-    throw new Error(msg);
-  }
-  return res.json() as Promise<{ ok: boolean; meta: { columns: GridColumnMeta[] } }>;
-}
-

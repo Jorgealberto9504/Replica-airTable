@@ -1,4 +1,4 @@
-// Construye PermissionContext a partir del request + baseId
+// apps/backend/src/permissions/context.ts
 import type { Request } from 'express';
 import { prisma } from '../services/db.js';
 import { getAuthUser } from '../middlewares/auth.middleware.js';
@@ -8,38 +8,42 @@ export async function buildPermissionContext(req: Request, baseId: number): Prom
   const me = getAuthUser<{
     id: number;
     platformRole: 'USER' | 'SYSADMIN';
-    canCreateBases: boolean;
+    canCreateBases?: boolean;
   }>(req);
 
-  if (!me) throw Object.assign(new Error('No autenticado'), { status: 401 });
+  if (!me) {
+    throw Object.assign(new Error('No autenticado'), { status: 401 });
+  }
 
+  // 1) Trae la base (owner + visibilidad)
   const base = await prisma.base.findUnique({
     where: { id: baseId },
     select: {
       id: true,
       ownerId: true,
       visibility: true, // 'PUBLIC' | 'PRIVATE'
-      members: {
-        where: { userId: me.id },
-        select: { role: true }, // 'EDITOR' | 'COMMENTER' | 'VIEWER'
-        take: 1,
-      },
     },
   });
+  if (!base) {
+    throw Object.assign(new Error('Base no encontrada'), { status: 404 });
+  }
 
-  if (!base) throw Object.assign(new Error('Base no encontrada'), { status: 404 });
-
-  const membershipRole = base.members[0]?.role ?? null;
+  // 2) Trae la membresía por índice único (baseId,userId)
+  //    (Más seguro/eficiente que via "members: { take: 1 }")
+  const membership = await prisma.baseMember.findUnique({
+    where: { baseId_userId: { baseId, userId: me.id } },
+    select: { role: true },
+  });
 
   const ctx: PermissionContext = {
     userId: me.id,
     platformRole: me.platformRole,
-    canCreateBases: me.canCreateBases,
+    canCreateBases: !!me.canCreateBases,
 
     baseId: base.id,
-    baseVisibility: base.visibility, // ya es 'PUBLIC' | 'PRIVATE'
+    baseVisibility: base.visibility, // enum del schema: 'PUBLIC' | 'PRIVATE'
     isOwner: base.ownerId === me.id,
-    membershipRole,
+    membershipRole: membership?.role ?? null,
   };
 
   return ctx;
