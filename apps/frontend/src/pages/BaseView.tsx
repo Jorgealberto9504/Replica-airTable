@@ -6,7 +6,13 @@ import MembersModal from './components/MembersModal';
 import TabsBar from './components/TabsBar';
 
 import { useAuth } from '../auth/AuthContext';
-import { getBaseDetail, type BaseVisibility } from '../api/bases';
+import {
+  getBaseDetail,
+  resolveBase,
+  type BaseVisibility,
+  type GetBaseDetailResp,
+  type ResolveBaseResp,
+} from '../api/bases';
 
 import {
   listTabs,
@@ -27,6 +33,95 @@ type RecordPerms = {
   canComment: boolean;
 };
 
+/* =========================
+   Helpers para rol/permisos
+   ========================= */
+function pickRole(payload: any): 'VIEWER' | 'COMMENTER' | 'EDITOR' | null {
+  const cand =
+    payload?.membershipRole ??
+    payload?.memberRole ??
+    payload?.role ??
+    null;
+  if (cand === 'VIEWER' || cand === 'COMMENTER' || cand === 'EDITOR') return cand;
+  return null;
+}
+
+function pickBoolPerm(obj: any, camel: string, namespaced: string, nestedKey?: string): boolean {
+  if (!obj) return false;
+  if (obj[camel] === true) return true;                // e.g. recordsUpdate
+  if (obj[namespaced] === true) return true;           // e.g. 'records:update'
+  if (nestedKey && obj.records && obj.records[nestedKey] === true) return true; // e.g. { records:{ update:true } }
+  return false;
+}
+
+function deriveAccess({
+  meId,
+  meIsAdmin,
+  resolveResp,
+  detailResp,
+}: {
+  meId?: number;
+  meIsAdmin: boolean;
+  resolveResp?: ResolveBaseResp;
+  detailResp?: GetBaseDetailResp;
+}) {
+  const base = (resolveResp?.base ?? detailResp?.base)!;
+  const ownerId = base.ownerId;
+  const ownerName = base.owner?.fullName;
+
+  // rol
+  const role =
+    pickRole(resolveResp) ??
+    pickRole(detailResp) ??
+    null;
+
+  // permisos (pueden venir en cualquiera de las dos respuestas)
+  const P = (resolveResp as any)?.permissions ?? (detailResp as any)?.permissions ?? {};
+
+  const schemaManage =
+    meIsAdmin ||
+    (ownerId && meId === ownerId) ||
+    pickBoolPerm(P, 'schemaManage', 'schema:manage');
+
+  const canCreate =
+    meIsAdmin ||
+    (ownerId && meId === ownerId) ||
+    role === 'EDITOR' ||
+    pickBoolPerm(P, 'recordsCreate', 'records:create', 'create');
+
+  const canUpdate =
+    meIsAdmin ||
+    (ownerId && meId === ownerId) ||
+    role === 'EDITOR' ||
+    pickBoolPerm(P, 'recordsUpdate', 'records:update', 'update');
+
+  const canDelete =
+    meIsAdmin ||
+    (ownerId && meId === ownerId) ||
+    role === 'EDITOR' ||
+    pickBoolPerm(P, 'recordsDelete', 'records:delete', 'delete');
+
+  const canComment =
+    meIsAdmin ||
+    (ownerId && meId === ownerId) ||
+    role === 'EDITOR' ||
+    role === 'COMMENTER' ||
+    pickBoolPerm(P, 'commentsCreate', 'comments:create', 'comment');
+
+  // eslint-disable-next-line no-console
+  console.debug('[BaseView] raw role/perms:', { role, P });
+  // eslint-disable-next-line no-console
+  console.debug('[BaseView] derived perms:', { schemaManage, canCreate, canUpdate, canDelete, canComment });
+
+  return {
+    baseName: base.name,
+    visibility: base.visibility,
+    ownerName,
+    canManage: schemaManage,
+    recordPerms: { canCreate, canUpdate, canDelete, canComment } as RecordPerms,
+  };
+}
+
 export default function BaseView() {
   const nav = useNavigate();
   const { baseId: baseIdStr, tableId: tableIdStr } = useParams();
@@ -34,6 +129,7 @@ export default function BaseView() {
   const urlTableId = tableIdStr ? Number(tableIdStr) : null;
 
   const { user: me, logout } = useAuth();
+  const meIsAdmin = me?.platformRole === 'SYSADMIN';
 
   const [baseName, setBaseName] = useState('');
   const [visibility, setVisibility] = useState<BaseVisibility>('PRIVATE');
@@ -42,8 +138,7 @@ export default function BaseView() {
   const [tabs, setTabs] = useState<TabItem[]>([]);
   const [loadingTabs, setLoadingTabs] = useState(false);
 
-  const [canManage, setCanManage] = useState(false); // schema:manage
-
+  const [canManage, setCanManage] = useState(false);
   const [recordPerms, setRecordPerms] = useState<RecordPerms>({
     canCreate: false,
     canUpdate: false,
@@ -58,38 +153,38 @@ export default function BaseView() {
   const [formName, setFormName] = useState('');
   const [formErr, setFormErr] = useState<string>('');
 
+  // === Carga de base + permisos ===
   useEffect(() => {
+    if (!Number.isFinite(baseId)) return;
+
     (async () => {
-      const d = await getBaseDetail(baseId);
-      setBaseName(d.base.name);
-      setVisibility(d.base.visibility);
-      setOwnerName(d.base.owner?.fullName);
+      try {
+        let resolveResp: ResolveBaseResp | undefined;
+        let detailResp: GetBaseDetailResp | undefined;
 
-      const isAdmin = me?.platformRole === 'SYSADMIN';
-      const isOwner = d.base.ownerId === me?.id;
+        try { resolveResp = await resolveBase(baseId); } catch { /* ignore */ }
+        try { detailResp  = await getBaseDetail(baseId); } catch { /* ignore */ }
 
-      const role = (d as any).membershipRole as ('VIEWER' | 'COMMENTER' | 'EDITOR' | null | undefined);
-      const perms = (d as any).permissions ?? {};
+        if (!resolveResp && !detailResp) throw new Error('No se pudo cargar la base');
 
-      const schemaManage = Boolean(isAdmin || isOwner || perms.schemaManage === true);
-      setCanManage(schemaManage);
+        const a = deriveAccess({
+          meId: me?.id,
+          meIsAdmin: !!meIsAdmin,
+          resolveResp,
+          detailResp,
+        });
 
-      // Para registros, habilitamos por cualquiera de estas condiciones:
-      const canUpd = Boolean(isAdmin || isOwner || role === 'EDITOR' || perms.recordsUpdate === true);
-      const canCre = Boolean(isAdmin || isOwner || role === 'EDITOR' || perms.recordsCreate === true);
-      const canDel = Boolean(isAdmin || isOwner || role === 'EDITOR' || perms.recordsDelete === true);
-      const canCom = Boolean(
-        isAdmin || isOwner || role === 'EDITOR' || role === 'COMMENTER' || perms.commentsCreate === true
-      );
-
-      setRecordPerms({
-        canCreate: canCre,
-        canUpdate: canUpd,
-        canDelete: canDel,
-        canComment: canCom,
-      });
+        setBaseName(a.baseName);
+        setVisibility(a.visibility);
+        setOwnerName(a.ownerName);
+        setCanManage(a.canManage);
+        setRecordPerms(a.recordPerms);
+      } catch {
+        setCanManage(false);
+        setRecordPerms({ canCreate: false, canUpdate: false, canDelete: false, canComment: false });
+      }
     })();
-  }, [baseId, me?.id, me?.platformRole]);
+  }, [baseId, me?.id, meIsAdmin]);
 
   async function refreshTabs() {
     setLoadingTabs(true);
@@ -170,7 +265,7 @@ export default function BaseView() {
 
   async function handleReorder(orderedIds: number[]) {
     const map = new Map(tabs.map((t) => [t.id, t]));
-    const next = orderedIds.map((id, i) => ({ ...(map.get(id)!), position: i + 1 }));
+    const next = orderedIds.map((id, i) => ({ ...(map.get(id)!) , position: i + 1 }));
     setTabs(next);
     try {
       await reorderTabs(baseId, orderedIds);
@@ -193,14 +288,16 @@ export default function BaseView() {
     }
   }
 
+  // Renombrar sin recargar lista completa
   async function submitRename() {
     if (!formName.trim() || !openRename.id) return;
     try {
       setFormErr('');
       await renameTable(baseId, openRename.id, formName.trim());
+      // Actualización local sin pedir toda la lista:
+      setTabs(prev => prev.map(t => t.id === openRename.id ? { ...t, name: formName.trim() } : t));
       setOpenRename({ open: false });
       setFormName('');
-      await refreshTabs();
     } catch (e: any) {
       setFormErr(e?.message || 'No se pudo renombrar la tabla');
     }
@@ -225,7 +322,6 @@ export default function BaseView() {
   return (
     <>
       <Header user={me ?? undefined} onLogout={logout} />
-      {/* 👇 ancho completo para esta página */}
       <main className="content content--wide">
         <div className="flex items-center gap-3 mb-3">
           <h1 className="m-0 text-2xl font-extrabold">{baseName}</h1>

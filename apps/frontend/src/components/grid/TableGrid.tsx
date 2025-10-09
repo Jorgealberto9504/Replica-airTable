@@ -1,9 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   listFields, createField, updateField, deleteField, listOptions,
   type Field, type FieldType,
 } from '../../api/fields';
 import { queryRecords, createRecord, patchRecord, deleteRecord } from '../../api/records';
+
+// 👇 NUEVO
+import CommentsPanel from '../comments/Comments.Panel';
+import { countCommentsForRecords } from '../../api/comments';
 
 type RecordPerms = {
   canCreate: boolean;
@@ -32,8 +37,8 @@ const MAX_COL_W = 800;
 /** Construye la plantilla de columnas del grid con anchos específicos */
 function makeGridTemplate(widths: number[]) {
   const mids = widths.map(w => `${w}px`).join(' ');
-  // # + campos + add-col + acciones
-  return `var(--grid-id-w) ${mids} var(--grid-addcol-w) var(--grid-actions-w)`;
+  // # + campos + add-col
+  return `var(--grid-id-w) ${mids} var(--grid-addcol-w)`;
 }
 
 export default function TableGrid({ baseId, tableId, perms, canManageFields }: Props) {
@@ -58,11 +63,22 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   const [addColOpen, setAddColOpen] = useState(false);
   const [newColName, setNewColName] = useState('');
   const [newColType, setNewColType] = useState<FieldType>('TEXT');
+  const [newSelectOpts, setNewSelectOpts] = useState<string[]>(['Opción 1', 'Opción 2']);
 
   const [renameOpen, setRenameOpen] = useState<{ open: boolean; field?: Field }>({ open: false });
   const [renameName, setRenameName] = useState('');
   const [typeOpen, setTypeOpen] = useState<{ open: boolean; field?: Field }>({ open: false });
   const [typeValue, setTypeValue] = useState<FieldType>('TEXT');
+  const [typeSelectOpts, setTypeSelectOpts] = useState<string[]>(['Opción 1', 'Opción 2']);
+
+  // === Menú contextual de fila (clic derecho) ===
+  const [rowMenu, setRowMenu] = useState<{ recordId: number; x: number; y: number } | null>(null);
+  const rowMenuRef = useRef<HTMLDivElement>(null);
+
+  // 👇 NUEVO: estado del panel de comentarios y conteos
+  const [cmtPanel, setCmtPanel] = useState<{ open: boolean; recordId: number | null }>({ open: false, recordId: null });
+  const [commentCounts, setCommentCounts] = useState<Record<number, number>>({});
+
   const [error, setError] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -87,6 +103,26 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       containerRef.current?.removeEventListener('scroll', onScroll, true);
     };
   }, [columnMenu]);
+
+  // Cerrar menú de fila al hacer clic fuera / Escape / scroll
+  useEffect(() => {
+    if (!rowMenu) return;
+    function onDoc(e: MouseEvent) {
+      if (!rowMenuRef.current) return;
+      const t = e.target as Node;
+      if (!rowMenuRef.current.contains(t)) setRowMenu(null);
+    }
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setRowMenu(null); }
+    function onScroll() { setRowMenu(null); }
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    containerRef.current?.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+      containerRef.current?.removeEventListener('scroll', onScroll, true);
+    };
+  }, [rowMenu]);
 
   // Anchos por columna + estado de resize
   const [colWidths, setColWidths] = useState<Record<number, number>>({});
@@ -135,6 +171,22 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     }
   }
   useEffect(() => { load(); /* eslint-disable-line */ }, [baseId, tableId, page, pageSize]);
+
+  // 👇 NUEVO: cargar conteos de comentarios para las filas visibles
+  useEffect(() => {
+    if (!records.length) { setCommentCounts({}); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const ids = records.map(r => r.id);
+        const map = await countCommentsForRecords(baseId, tableId, ids);
+        if (alive) setCommentCounts(map);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => { alive = false; };
+  }, [baseId, tableId, records]);
 
   async function ensureSelectOptions(baseId: number, tableId: number, fs: Field[]) {
     const selectIds = fs.filter(x => x.type === 'SINGLE_SELECT' || x.type === 'MULTI_SELECT').map(x => x.id);
@@ -188,6 +240,12 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       await deleteRecord(baseId, tableId, id);
       setRecords((prev) => prev.filter((r) => r.id !== id));
       setTotal((t) => Math.max(0, t - 1));
+      // Limpia conteo si existía
+      setCommentCounts(prev => {
+        const n = { ...prev };
+        delete n[id];
+        return n;
+      });
     } catch (e: any) { alert(e?.message || 'No se pudo eliminar'); }
   }
 
@@ -197,16 +255,26 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     setColumnMenu({ field: f, x: rect.left, y: rect.bottom + 4 });
   }
 
+  // ===== Crear columna =====
   async function submitAddColumn() {
     if (!canManageFields) return;
     if (!newColName.trim()) return;
+
+    const isSelect = newColType === 'SINGLE_SELECT' || newColType === 'MULTI_SELECT';
+    const cleaned = isSelect
+      ? newSelectOpts.map(s => s.trim()).filter(Boolean).map(label => ({ label }))
+      : undefined;
+
     try {
       await createField(baseId, tableId, {
         name: newColName.trim(),
         type: newColType,
-        options: (newColType === 'SINGLE_SELECT' || newColType === 'MULTI_SELECT') ? [{ label: 'Opción A' }, { label: 'Opción B' }] : undefined,
+        options: isSelect ? (cleaned && cleaned.length ? cleaned : [{ label: 'Opción 1' }, { label: 'Opción 2' }]) : undefined,
       });
-      setAddColOpen(false); setNewColName('');
+      setAddColOpen(false);
+      setNewColName('');
+      setNewColType('TEXT');
+      setNewSelectOpts(['Opción 1', 'Opción 2']);
       const f = await listFields(baseId, tableId);
       const withOptions = await ensureSelectOptions(baseId, tableId, f.fields);
       setFields(withOptions);
@@ -218,6 +286,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     } catch (e: any) { alert(e?.message || 'No se pudo crear la columna'); }
   }
 
+  // ===== Renombrar columna =====
   async function submitRenameColumn() {
     if (!canManageFields) return;
     if (!renameOpen.field || !renameName.trim()) return;
@@ -228,13 +297,20 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     } catch (e: any) { alert(e?.message || 'No se pudo renombrar'); }
   }
 
+  // ===== Cambiar tipo =====
   async function submitChangeType() {
     if (!canManageFields) return;
     if (!typeOpen.field) return;
+
+    const isSelect = typeValue === 'SINGLE_SELECT' || typeValue === 'MULTI_SELECT';
+    const cleaned = isSelect
+      ? typeSelectOpts.map(s => s.trim()).filter(Boolean).map(label => ({ label }))
+      : undefined;
+
     try {
       await updateField(baseId, tableId, typeOpen.field.id, {
         type: typeValue,
-        options: (typeValue === 'SINGLE_SELECT' || typeValue === 'MULTI_SELECT') ? [{ label: 'Opción A' }, { label: 'Opción B' }] : undefined,
+        options: isSelect ? (cleaned && cleaned.length ? cleaned : [{ label: 'Opción 1' }, { label: 'Opción 2' }]) : undefined,
       });
       setTypeOpen({ open: false });
       const f = await listFields(baseId, tableId);
@@ -267,10 +343,26 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
 
   function startResize(fid: number, e: React.MouseEvent) {
     e.preventDefault();
-    if (!canManageFields) return; // solo quien gestiona esquema puede cambiar anchos persistidos si luego los guardas
+    if (!canManageFields) return;
     const th = (e.currentTarget as HTMLElement).parentElement as HTMLElement;
     const startW = th.getBoundingClientRect().width;
     setResizing({ id: fid, startX: e.clientX, startW });
+  }
+
+  // === abrir menú de fila (click derecho) ===
+  function openRowContextMenu(e: React.MouseEvent, recordId: number) {
+    e.preventDefault();
+    const x = Math.min(e.clientX, window.innerWidth - 220);
+    const y = Math.min(e.clientY, window.innerHeight - 140);
+    setRowMenu({ recordId, x, y });
+  }
+
+  // 👇 NUEVO: helper para actualizar badge del record activo
+  function applyDeltaToRecord(recordId: number, delta: number) {
+    setCommentCounts(prev => ({
+      ...prev,
+      [recordId]: Math.max(0, (prev[recordId] ?? 0) + delta),
+    }));
   }
 
   return (
@@ -290,7 +382,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       <div className="grid-wrap" ref={containerRef}>
         {/* Header */}
         <div className="grid-row grid-header" style={rowStyle}>
-          {/* # (sin sticky) */}
+          {/* # */}
           <div className="grid-th id-col">#</div>
 
           {fields.map((f) => (
@@ -326,13 +418,16 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
               <button
                 className="add-col-btn"
                 title="Agregar columna"
-                onClick={() => { setAddColOpen(true); setNewColType('TEXT'); setNewColName(''); }}
+                onClick={() => {
+                  setAddColOpen(true);
+                  setNewColType('TEXT');
+                  setNewColName('');
+                  setNewSelectOpts(['Opción 1', 'Opción 2']);
+                }}
               >+</button>
             )}
           </div>
 
-          {/* Acciones */}
-          <div className="grid-th actions-col" />
         </div>
 
         {/* Rows */}
@@ -344,8 +439,28 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
           records.map((r, idx) => {
             const rowNumber = (page - 1) * pageSize + idx + 1;
             return (
-              <div key={r.id} className="grid-row" style={rowStyle}>
-                <div className="grid-td id-col">{rowNumber}</div>
+              <div
+                key={r.id}
+                className="grid-row"
+                style={rowStyle}
+                onContextMenu={(e) => openRowContextMenu(e, r.id)}
+              >
+                <div className="grid-td id-col">
+                  <span>{rowNumber}</span>
+                  {/* Botón de comentarios */}
+                  
+                
+                  {commentCounts[r.id] > 0 && (
+  <button
+    className="icon-btn ml-1"
+    title={`Comentarios (${commentCounts[r.id]})`}
+    onClick={() => setCmtPanel({ open: true, recordId: r.id })}
+  >
+    💬
+  </button>
+)}
+                 
+                </div>
 
                 {fields.map((f) => (
                   <div
@@ -366,12 +481,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
                   </div>
                 ))}
 
-                <div className="grid-td add-col-cell" />
-                <div className="grid-td actions-col">
-                  {effectivePerms.canDelete && (
-                    <button className="icon-btn" title="Eliminar fila" onClick={() => handleDeleteRow(r.id)}>🗑</button>
-                  )}
-                </div>
               </div>
             );
           })
@@ -394,18 +503,79 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
             className="context-panel"
             style={{ position:'fixed', left:columnMenu.x, top:columnMenu.y }}
           >
-            <div className="menu-item" onClick={() => { setRenameOpen({ open:true, field:columnMenu.field }); setRenameName(columnMenu.field.name); setColumnMenu(null); }}>Renombrar…</div>
-            <div className="menu-item" onClick={() => { setTypeOpen({ open:true, field:columnMenu.field }); setTypeValue(columnMenu.field.type); setColumnMenu(null); }}>Cambiar tipo…</div>
-            <div className="menu-item-danger" onClick={() => { handleDeleteColumn(columnMenu.field.id); setColumnMenu(null); }}>Enviar a papelera</div>
+            <div
+              className="menu-item"
+              onClick={() => {
+                setRenameOpen({ open:true, field:columnMenu.field });
+                setRenameName(columnMenu.field.name);
+                setColumnMenu(null);
+              }}
+            >Renombrar…</div>
+
+            <div
+              className="menu-item"
+              onClick={() => {
+                setTypeOpen({ open:true, field:columnMenu.field });
+                setTypeValue(columnMenu.field.type);
+                if (columnMenu.field.type === 'SINGLE_SELECT' || columnMenu.field.type === 'MULTI_SELECT') {
+                  setTypeSelectOpts((columnMenu.field.options ?? []).map(o => o.label));
+                } else {
+                  setTypeSelectOpts(['Opción 1','Opción 2']);
+                }
+                setColumnMenu(null);
+              }}
+            >Cambiar tipo…</div>
+
+            <div
+              className="menu-item-danger"
+              onClick={() => { handleDeleteColumn(columnMenu.field.id); setColumnMenu(null); }}
+            >Enviar a papelera</div>
           </div>
         </>
       )}
 
-      {/* Modals */}
+      {/* Row context menu */}
+      {rowMenu && (
+        <>
+          <div className="context-overlay" onClick={() => setRowMenu(null)} />
+          <div
+            ref={rowMenuRef}
+            className="context-panel"
+            style={{ position:'fixed', left:rowMenu.x, top:rowMenu.y, minWidth:220 }}
+          >
+            <div
+              className="menu-item"
+              onClick={() => {
+                setRowMenu(null);
+                setCmtPanel({ open: true, recordId: rowMenu.recordId });
+              }}
+            >comentarios</div>
+
+            {effectivePerms.canDelete && (
+              <div
+                className="menu-item-danger"
+                onClick={() => { handleDeleteRow(rowMenu.recordId); setRowMenu(null); }}
+              >Eliminar fila</div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Modals esquema */}
       {addColOpen && canManageFields && (
         <Modal title="Nueva columna" onClose={() => setAddColOpen(false)} onConfirm={submitAddColumn} confirmText="Crear">
-          <FieldDefForm name={newColName} type={newColType} onName={setNewColName} onType={setNewColType} />
-          <div className="muted mt-2 text-xs">Si eliges SELECT, se crearán 2 opciones por defecto.</div>
+          <FieldDefForm name={newColName} type={newColType} onName={setNewColName} onType={(t) => {
+            setNewColType(t);
+            if ((t === 'SINGLE_SELECT' || t === 'MULTI_SELECT') && newSelectOpts.length === 0) {
+              setNewSelectOpts(['Opción 1', 'Opción 2']);
+            }
+          }} />
+          {(newColType === 'SINGLE_SELECT' || newColType === 'MULTI_SELECT') && (
+            <>
+              <div className="muted mt-2 text-xs">Define las opciones del {newColType === 'SINGLE_SELECT' ? 'Single Select' : 'Multi Select'}.</div>
+              <OptionEditor options={newSelectOpts} onChange={setNewSelectOpts} />
+            </>
+          )}
         </Modal>
       )}
 
@@ -420,7 +590,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
 
       {typeOpen.open && typeOpen.field && canManageFields && (
         <Modal title="Cambiar tipo" onClose={() => setTypeOpen({ open:false })} onConfirm={submitChangeType} confirmText="Cambiar">
-          {usageByField.get(typeOpen.field.id) ? (
+          {usageByField.get(typeOpen.field.id!) ? (
             <div className="alert-error">Esta columna tiene datos. Si el backend lo impide, verás un error al guardar.</div>
           ) : null}
           <div className="field">
@@ -429,7 +599,26 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
               {FIELD_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
+
+          {(typeValue === 'SINGLE_SELECT' || typeValue === 'MULTI_SELECT') && (
+            <>
+              <div className="muted mt-2 text-xs">Define las opciones para el nuevo tipo.</div>
+              <OptionEditor options={typeSelectOpts} onChange={setTypeSelectOpts} />
+            </>
+          )}
         </Modal>
+      )}
+
+      {/* 👇 NUEVO: Drawer de comentarios */}
+      {cmtPanel.open && cmtPanel.recordId != null && (
+        <CommentsPanel
+          baseId={baseId}
+          tableId={tableId}
+          recordId={cmtPanel.recordId}
+          canComment={effectivePerms.canComment}
+          onClose={() => setCmtPanel({ open: false, recordId: null })}
+          onDeltaCount={(delta) => applyDeltaToRecord(cmtPanel.recordId!, delta)}
+        />
       )}
 
       {error && <div className="alert-error mt-3">{error}</div>}
@@ -517,11 +706,10 @@ function NumberInput({ value, onCommit, allowDecimal=true }: { value:number|null
   );
 }
 
-/** MULTISELECT con panel flotante (position: fixed) y click-outside */
+/** MULTISELECT con panel flotante en PORTAL (siempre encima) */
 function MultiSelect({ options, value, onChange }: { options:Array<{value:number;label:string}>; value:number[]; onChange:(v:number[])=>void; }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{left:number; top:number; width:number}>({ left:0, top:0, width:220 });
 
   const label = value.length ? `${value.length} seleccionadas` : '—';
@@ -548,8 +736,9 @@ function MultiSelect({ options, value, onChange }: { options:Array<{value:number
   useEffect(() => {
     if (!open) return;
     function onDoc(e: MouseEvent) {
-      const t = e.target as Node;
-      if (panelRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      const target = e.target as Node;
+      const panel = document.getElementById('ms-portal');
+      if (panel?.contains(target) || btnRef.current?.contains(target)) return;
       setOpen(false);
     }
     function onKey(e: KeyboardEvent){ if(e.key === 'Escape') setOpen(false); }
@@ -558,28 +747,25 @@ function MultiSelect({ options, value, onChange }: { options:Array<{value:number
     return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
   }, [open]);
 
-  function toggle(v:number){ 
+  function toggle(v:number){
     if(value.includes(v)) onChange(value.filter(x=>x!==v));
-    else onChange([...value, v]); 
+    else onChange([...value, v]);
   }
 
   return (
     <div className="ms-wrap">
       <button ref={btnRef} className="ms-input" onClick={() => setOpen(o => !o)} aria-expanded={open}>{label}</button>
 
-      {open && (
-        <div
-          ref={panelRef}
-          className="ms-panel"
-          style={{ position:'fixed', left:pos.left, top:pos.top, minWidth:pos.width }}
-        >
+      {open && createPortal(
+        <div id="ms-portal" className="ms-portal-panel" style={{ left:pos.left, top:pos.top, minWidth:pos.width }}>
           {options.map(o => (
             <label key={o.value} className="ms-row">
               <input type="checkbox" checked={value.includes(o.value)} onChange={()=>toggle(o.value)} />
               <span>{o.label}</span>
             </label>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -623,7 +809,7 @@ function parseTimeToMinutes(s: string | null): number | null {
 }
 
 /* =========================
-   UI mínimas: Modal + FieldDefForm
+   UI mínimas: Modal + FieldDefForm + OptionEditor
    ========================= */
 function Modal({
   title, children, onClose, onConfirm, confirmText='Guardar'
@@ -659,6 +845,40 @@ function FieldDefForm({
         <select className="select" value={type} onChange={(e)=>onType(e.target.value as FieldType)}>
           {FIELD_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
+      </div>
+    </div>
+  );
+}
+
+/** Editor simple de opciones para SELECT */
+function OptionEditor({
+  options, onChange,
+}: { options: string[]; onChange: (opts: string[]) => void }) {
+  function update(i: number, v: string) {
+    const next = options.slice();
+    next[i] = v;
+    onChange(next);
+  }
+  function add() {
+    onChange([...options, `Opción ${options.length + 1}`]);
+  }
+  function remove(i: number) {
+    const next = options.slice();
+    next.splice(i, 1);
+    onChange(next.length ? next : ['Opción 1']);
+  }
+  return (
+    <div className="mt-2">
+      <div className="grid gap-2">
+        {options.map((opt, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <input className="input" value={opt} onChange={(e) => update(i, e.target.value)} placeholder={`Opción ${i+1}`} />
+            <button className="btn" onClick={() => remove(i)} title="Eliminar">–</button>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2">
+        <button className="btn" onClick={add}>Agregar opción</button>
       </div>
     </div>
   );

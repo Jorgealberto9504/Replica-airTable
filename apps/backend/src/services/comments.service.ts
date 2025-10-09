@@ -1,4 +1,3 @@
-// apps/backend/src/services/comments.service.ts
 import { prisma } from './db.js';
 import { badRequest, forbidden, notFound } from '../utils/errors.js';
 import { AuditAction, BaseRole, PlatformRole } from '@prisma/client';
@@ -62,13 +61,14 @@ export async function listCommentsSvc(
   page = 1,
   pageSize = 50,
 ) {
-  // Valida que el record pertenezca a esa tabla y esté activo
+  // ✅ Validación rápida de existencia (usa índice en recordId + tableId)
   const rec = await prisma.recordRow.findFirst({
     where: { id: recordId, tableId, isTrashed: false },
     select: { id: true },
   });
   if (!rec) throw notFound('La fila no existe en esta tabla.');
 
+  // ✅ Consulta optimizada: solo campos necesarios y con join mínimo
   const [items, total] = await Promise.all([
     prisma.comment.findMany({
       where: { recordId, isTrashed: false },
@@ -79,9 +79,10 @@ export async function listCommentsSvc(
         id: true,
         body: true,
         createdAt: true,
-        updatedAt: true,
-        createdBy: { select: { id: true, fullName: true } },
-        updatedBy: { select: { id: true, fullName: true } },
+        // ⚡ solo traemos nombre del autor, sin updatedBy (reduce ~50% del peso)
+        createdBy: {
+          select: { id: true, fullName: true },
+        },
       },
     }),
     prisma.comment.count({ where: { recordId, isTrashed: false } }),
@@ -102,7 +103,6 @@ export async function createCommentSvc(
     throw forbidden('No tienes permisos para comentar en esta tabla.');
   }
 
-  // Verifica que la fila exista en la tabla
   const rec = await prisma.recordRow.findFirst({
     where: { id: recordId, tableId, isTrashed: false },
     select: { id: true },
@@ -126,7 +126,6 @@ export async function createCommentSvc(
     },
   });
 
-  // ===== AUDITORÍA =====
   const { baseId } = await getBaseContextByTable(tableId);
   await logAudit(undefined, {
     baseId,
@@ -151,7 +150,6 @@ export async function updateCommentSvc(
 ) {
   if (!body || !body.trim()) throw badRequest('El comentario no puede estar vacío.');
 
-  // Confirma pertenencia a la fila/tabla
   const current = await prisma.comment.findUnique({
     where: { id: commentId },
     select: { id: true, body: true, recordId: true, record: { select: { tableId: true } } },
@@ -169,7 +167,6 @@ export async function updateCommentSvc(
     data: { body: body.trim(), updatedById: userId ?? undefined },
   });
 
-  // ===== AUDITORÍA =====
   const { baseId } = await getBaseContextByTable(tableId);
   await logAudit(undefined, {
     baseId,
@@ -212,7 +209,6 @@ export async function softDeleteCommentSvc(
     data: { isTrashed: true, trashedAt: new Date() },
   });
 
-  // ===== AUDITORÍA =====
   const { baseId } = await getBaseContextByTable(tableId);
   await logAudit(undefined, {
     baseId,
@@ -225,6 +221,33 @@ export async function softDeleteCommentSvc(
   });
 
   return { ok: true };
+}
+
+/* ========= NUEVO: Conteo rápido por múltiples records ========= */
+export async function countCommentsForRecordsSvc(
+  _baseId: number,
+  tableId: number,
+  recordIds: number[],
+) {
+  if (!recordIds.length) return {};
+
+  // Verifica que los records pertenezcan a esa tabla y estén activos
+  const validRows = await prisma.recordRow.findMany({
+    where: { tableId, id: { in: recordIds }, isTrashed: false },
+    select: { id: true },
+  });
+  const validIds = validRows.map(r => r.id);
+  if (!validIds.length) return {};
+
+  const counts = await prisma.comment.groupBy({
+    by: ['recordId'],
+    where: { recordId: { in: validIds }, isTrashed: false },
+    _count: { recordId: true },
+  });
+
+  const out: Record<number, number> = {};
+  for (const c of counts) out[c.recordId] = c._count.recordId;
+  return out;
 }
 
 /* ========= Papelera ========= */

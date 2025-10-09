@@ -6,35 +6,33 @@ import {
   createComment,
   updateComment,
   softDeleteComment,
-  // trash
   listTrashedComments,
   restoreComment,
   deleteCommentPermanent,
   emptyCommentTrash,
   purgeCommentTrash,
+  countCommentsForRecords,
 } from '../controllers/comments.controller.js';
 
-// Muy importante: mergeParams para heredar baseId/tableId/recordId del parent
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
-// Base absoluta (montado): /bases/:baseId/tables/:tableId/records/:recordId/comments
+// Base: /bases/:baseId/tables/:tableId/records/:recordId/comments
+router.get('/', guard('records:read'), listComments);
+router.post('/', guard('comments:create'), createComment);
 
-// Lectura de comentarios: quien pueda leer registros
-router.get('/',                guard('records:read'),    listComments);
+// Conteo rápido (nuevo endpoint)
+router.get('/count', guard('records:read'), countCommentsForRecords);
 
-// Crear/editar/borrar/recuperar comentarios: COMMENTER+ (comments:create)
-router.post('/',               guard('comments:create'),  createComment);
+// Papelera
+router.get('/trash', guard('comments:create'), listTrashedComments);
+router.post('/trash/empty', guard('comments:create'), emptyCommentTrash);
+router.post('/trash/purge', guard('comments:create'), purgeCommentTrash);
 
-// Papelera (solo para quien puede comentar)
-router.get('/trash',           guard('comments:create'),  listTrashedComments);
-router.post('/trash/empty',    guard('comments:create'),  emptyCommentTrash);
-router.post('/trash/purge',    guard('comments:create'),  purgeCommentTrash);
-
-// Operar comentario puntual
-router.patch('/:commentId',           guard('comments:create'), updateComment);
-router.delete('/:commentId',          guard('comments:create'), softDeleteComment);
-router.post('/:commentId/restore',    guard('comments:create'), restoreComment);
-router.delete('/:commentId/permanent',guard('comments:create'), deleteCommentPermanent);
+// Operaciones puntuales
+router.patch('/:commentId', guard('comments:create'), updateComment);
+router.delete('/:commentId', guard('comments:create'), softDeleteComment);
+router.post('/:commentId/restore', guard('comments:create'), restoreComment);
+router.delete('/:commentId/permanent', guard('comments:create'), deleteCommentPermanent);
 
 export default router;

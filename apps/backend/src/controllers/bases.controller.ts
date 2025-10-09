@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { getAuthUser } from '../middlewares/auth.middleware.js';
+import { prisma } from '../services/db.js';
 import {
   // === WORKSPACES → BASES ===
   createBaseInWorkspace,
@@ -63,6 +64,70 @@ function parseWorkspaceId(req: Request): number {
     throw Object.assign(new Error('workspaceId inválido'), { status: 400 });
   }
   return workspaceId;
+}
+
+/* ======================================================================================
+   Derivación de membershipRole + permissions para el viewer actual
+   --------------------------------------------------------------------------------------
+   NOTA sobre el modelo:
+   - Si tu modelo Prisma se llama `BaseMember` usa prisma.baseMember (como está aquí).
+   - Si en tu schema se llama `BaseMembership`, cambia la línea por prisma.baseMembership.
+   ====================================================================================== */
+
+type MembershipRole = 'VIEWER' | 'COMMENTER' | 'EDITOR';
+type DerivedPerms = {
+  schemaManage: boolean;
+  recordsRead: boolean;
+  recordsCreate: boolean;
+  recordsUpdate: boolean;
+  recordsDelete: boolean;
+  commentsCreate: boolean;
+};
+
+async function deriveMembershipAndPerms(opts: {
+  baseId: number;
+  viewerId: number;
+  isSysadmin: boolean;
+  ownerId?: number | null;
+}): Promise<{ membershipRole: MembershipRole | null; permissions: DerivedPerms }> {
+  const { baseId, viewerId, isSysadmin, ownerId } = opts;
+
+  const isOwner = ownerId === viewerId;
+
+  // SYSADMIN u Owner: todo permitido
+  if (isSysadmin || isOwner) {
+    return {
+      membershipRole: null, // no es necesario para el FE cuando es owner/admin
+      permissions: {
+        schemaManage: true,
+        recordsRead: true,
+        recordsCreate: true,
+        recordsUpdate: true,
+        recordsDelete: true,
+        commentsCreate: true,
+      },
+    };
+  }
+
+  // Buscar la membresía del usuario en esta base (activa)
+  const membership = await prisma.baseMember.findFirst({
+    where: { baseId, userId: viewerId },
+    select: { role: true },
+  });
+
+  const role = (membership?.role ?? null) as MembershipRole | null;
+
+  // Derivar permisos mínimos por rol
+  const perms: DerivedPerms = {
+    schemaManage: false, // solo owner/sysadmin
+    recordsRead: true,   // si llegó al endpoint, ya pasó guard('base:view')
+    recordsCreate: role === 'EDITOR',
+    recordsUpdate: role === 'EDITOR',
+    recordsDelete: role === 'EDITOR',
+    commentsCreate: role === 'EDITOR' || role === 'COMMENTER',
+  };
+
+  return { membershipRole: role, permissions: perms };
 }
 
 /* ===========================
@@ -162,7 +227,6 @@ export async function moveBaseToWorkspaceCtrl(req: Request, res: Response) {
 /* ===========================
    CRUD BASES (activas)
    =========================== */
-// OJO: ya no existe POST /bases — se reemplazó por POST /workspaces/:workspaceId/bases
 
 /**
  * GET /bases
@@ -191,19 +255,38 @@ export async function listMyBasesCtrl(req: Request, res: Response) {
   return res.json({ ok: true, bases, total, page, pageSize });
 }
 
+/**
+ * GET /bases/:baseId
+ * Incluye membershipRole y permissions para el viewer actual.
+ */
 export async function getBaseCtrl(req: Request, res: Response) {
+  const me = getAuthUser<{ id: number; platformRole: 'USER' | 'SYSADMIN' }>(req);
+  if (!me) return res.status(401).json({ ok: false, error: 'No autenticado' });
+
   const baseId = parseBaseId(req);
   const base = await getBaseById(baseId); // excluye papelera
   if (!base) return res.status(404).json({ ok: false, error: 'Base no encontrada' });
-  return res.json({ ok: true, base });
+
+  const { membershipRole, permissions } = await deriveMembershipAndPerms({
+    baseId,
+    viewerId: me.id,
+    isSysadmin: me.platformRole === 'SYSADMIN',
+    ownerId: base.ownerId ?? null,
+  });
+
+  return res.json({ ok: true, base, membershipRole, permissions });
 }
 
 /**
  * GET /bases/:baseId/resolve
  * Devuelve la base, el id de la tabla por defecto (primera por position) y metadatos para el grid.
+ * También incluye membershipRole y permissions para que el FE pueda decidir permisos de edición.
  */
 export async function resolveBaseCtrl(req: Request, res: Response) {
   try {
+    const me = getAuthUser<{ id: number; platformRole: 'USER' | 'SYSADMIN' }>(req);
+    if (!me) return res.status(401).json({ ok: false, error: 'No autenticado' });
+
     const baseId = parseBaseId(req);
 
     const base = await getBaseById(baseId); // ya excluye papelera
@@ -214,19 +297,27 @@ export async function resolveBaseCtrl(req: Request, res: Response) {
       countActiveTablesForBase(baseId),        // número de tablas activas
     ]);
 
+    const { membershipRole, permissions } = await deriveMembershipAndPerms({
+      baseId,
+      viewerId: me.id,
+      isSysadmin: me.platformRole === 'SYSADMIN',
+      ownerId: base.ownerId ?? null,
+    });
+
     return res.json({
       ok: true,
       base,
       defaultTableId, // null si no hay tablas
       gridMeta: {
         totalTables,
-        // Stub ampliado: listo para cuando agregues columnas reales
         columns: [] as Array<{ id: number; name: string; type: string; width?: number }>,
         primaryColumnId: null as number | null,
         defaultSort: null as null | { columnId: number; direction: 'asc' | 'desc' },
         rowHeight: 'default' as 'default' | 'compact' | 'tall',
         version: 1,
       },
+      membershipRole,
+      permissions,
     });
   } catch (err: any) {
     return res

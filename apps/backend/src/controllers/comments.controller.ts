@@ -1,4 +1,3 @@
-// apps/backend/src/controllers/comments.controller.ts
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import {
@@ -11,6 +10,7 @@ import {
   deleteCommentPermanentSvc,
   emptyCommentTrashForRecordSvc,
   purgeTrashedCommentsForRecordOlderThanSvc,
+  countCommentsForRecordsSvc,
 } from '../services/comments.service.js';
 import { currentUserId } from '../utils/currentUser.js';
 
@@ -38,6 +38,23 @@ export async function listComments(req: Request, res: Response) {
   }
 }
 
+/* === NUEVO: Conteo rápido de comentarios por múltiples records === */
+export async function countCommentsForRecords(req: Request, res: Response) {
+  try {
+    const baseId = Number(req.params.baseId);
+    const tableId = Number(req.params.tableId);
+    const raw = String(req.query.ids ?? '');
+    const ids = raw.split(',').map(s => Number(s.trim())).filter(n => Number.isFinite(n));
+    if (!ids.length) return res.json({ ok: true, counts: {} });
+
+    const counts = await countCommentsForRecordsSvc(baseId, tableId, ids.slice(0, 1000));
+    res.json({ ok: true, counts });
+  } catch (e: any) {
+    res.status(e?.status ?? 400).json({ ok: false, error: e?.message ?? 'Error', details: e?.details });
+  }
+}
+
+/* === CRUD existente === */
 export async function createComment(req: Request, res: Response) {
   try {
     const baseId = Number(req.params.baseId);
@@ -81,7 +98,7 @@ export async function softDeleteComment(req: Request, res: Response) {
   }
 }
 
-/* ==== Papelera (comentarios) ==== */
+/* ==== Papelera ==== */
 export async function listTrashedComments(req: Request, res: Response) {
   try {
     const recordId = Number(req.params.recordId);

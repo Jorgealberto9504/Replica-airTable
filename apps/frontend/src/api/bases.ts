@@ -1,4 +1,3 @@
-// apps/frontend/src/api/bases.ts
 import { getJSON, API_URL } from './http';
 
 export type BaseVisibility = 'PUBLIC' | 'PRIVATE' | 'SHARED';
@@ -16,21 +15,24 @@ export type BaseDetail = {
   updatedAt?: string;
 };
 
-/** Permisos opcionales por acción que puede enviar el backend junto con el detail */
+/** Permisos: admitimos claves camelCase, namespaced y/o anidadas */
 export type BasePermissions = {
-  schemaManage?: boolean;
+  schemaManage?: boolean;          // camel
   recordsRead?: boolean;
   recordsCreate?: boolean;
   recordsUpdate?: boolean;
   recordsDelete?: boolean;
   commentsCreate?: boolean;
+
+  // namespaced planos: 'schema:manage', 'records:update', etc.
+  [k: string]: any;
 };
 
-/** Respuesta de detail con info de membresía/permisos (backwards compatible) */
 export type GetBaseDetailResp = {
   ok: boolean;
   base: BaseDetail;
   membershipRole?: 'VIEWER' | 'COMMENTER' | 'EDITOR' | null;
+  // algunos backends pueden usar { memberRole } o { role }; lo tratamos en el FE.
   permissions?: BasePermissions;
 };
 
@@ -49,17 +51,15 @@ export type BaseListItem = {
 
 /* ========= DETAIL ========= */
 export function getBaseDetail(baseId: number) {
-  // Si el backend no envía membershipRole/permissions, quedarán undefined.
   return getJSON<GetBaseDetailResp>(`/bases/${baseId}`);
 }
 
-/* ========= RESOLVE (default table + metadatos grid) ========= */
+/* ========= RESOLVE ========= */
 export type ResolveBaseResp = {
   ok: true;
   base: BaseDetail;
   defaultTableId: number | null;
   gridMeta?: { totalTables?: number; columns?: any[] };
-  // Opcionales si el backend decide enviarlos también aquí
   membershipRole?: 'VIEWER' | 'COMMENTER' | 'EDITOR' | null;
   permissions?: BasePermissions;
 };
@@ -68,7 +68,7 @@ export function resolveBase(baseId: number) {
   return getJSON<ResolveBaseResp>(`/bases/${baseId}/resolve`);
 }
 
-/* ========= LIST (con soporte opcional de búsqueda/paginación) ========= */
+/* ========= LIST ========= */
 export async function listBases(params?: {
   page?: number;
   pageSize?: number;
@@ -104,8 +104,6 @@ export async function listBases(params?: {
 }
 
 /* ========= UPDATE / DELETE ========= */
-
-// PATCH /bases/:baseId  { name }
 export async function renameBase(baseId: number, name: string) {
   const res = await fetch(`${API_URL}/bases/${baseId}`, {
     method: 'PATCH',
@@ -124,7 +122,6 @@ export async function renameBase(baseId: number, name: string) {
   return res.json() as Promise<{ ok: boolean; base: BaseDetail }>;
 }
 
-// PATCH /bases/:baseId  { visibility }
 export async function updateBaseVisibility(baseId: number, visibility: BaseVisibility) {
   const res = await fetch(`${API_URL}/bases/${baseId}`, {
     method: 'PATCH',
@@ -143,7 +140,6 @@ export async function updateBaseVisibility(baseId: number, visibility: BaseVisib
   return res.json() as Promise<{ ok: boolean; base: BaseDetail }>;
 }
 
-// DELETE /bases/:baseId
 export async function deleteBase(baseId: number) {
   const res = await fetch(`${API_URL}/bases/${baseId}`, {
     method: 'DELETE',
