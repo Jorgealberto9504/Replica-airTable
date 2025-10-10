@@ -1,14 +1,27 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+// apps/frontend/src/components/grid/TableGrid.tsx
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type React from 'react';
+
 import {
   listFields, createField, updateField, deleteField, listOptions,
   type Field, type FieldType,
 } from '../../api/fields';
-import { queryRecords, createRecord, patchRecord, deleteRecord } from '../../api/records';
+import { queryRecords, createRecord, patchRecord, deleteRecord, type SortSpec } from '../../api/records';
 
-// 👇 NUEVO
 import CommentsPanel from '../comments/Comments.Panel';
 import { countCommentsForRecords } from '../../api/comments';
+
+import Modal from './Modal';
+import FieldDefForm from './FieldDefForm';
+import OptionEditor from './OptionEditor';
+
+import { CellEditor, ReadonlyCell, toDataTypeAttr, printCellTitle } from './CellEditors';
+
+import GridToolbar from './GridToolbar';
+import ColumnMenu from './ColumnMenu';
+import RowMenu from './RowMenu';
+
+import GridFilters, { type FiltersValue } from './GridFilters';
 
 type RecordPerms = {
   canCreate: boolean;
@@ -20,9 +33,7 @@ type RecordPerms = {
 type Props = {
   baseId: number;
   tableId: number;
-  /** Permisos de registros (del BaseView, ya resueltos) */
   perms?: RecordPerms;
-  /** ¿Puede administrar esquema (owner/admin o permiso explícito)? */
   canManageFields?: boolean;
 };
 
@@ -30,14 +41,12 @@ const FIELD_TYPES: FieldType[] = [
   'TEXT','LONG_TEXT','NUMBER','CURRENCY','CHECKBOX','DATE','DATETIME','TIME','SINGLE_SELECT','MULTI_SELECT',
 ];
 
-const DEFAULT_COL_W = 180; // px
+const DEFAULT_COL_W = 180;
 const MIN_COL_W = 120;
 const MAX_COL_W = 800;
 
-/** Construye la plantilla de columnas del grid con anchos específicos */
 function makeGridTemplate(widths: number[]) {
   const mids = widths.map(w => `${w}px`).join(' ');
-  // # + campos + add-col
   return `var(--grid-id-w) ${mids} var(--grid-addcol-w)`;
 }
 
@@ -71,11 +80,9 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   const [typeValue, setTypeValue] = useState<FieldType>('TEXT');
   const [typeSelectOpts, setTypeSelectOpts] = useState<string[]>(['Opción 1', 'Opción 2']);
 
-  // === Menú contextual de fila (clic derecho) ===
   const [rowMenu, setRowMenu] = useState<{ recordId: number; x: number; y: number } | null>(null);
   const rowMenuRef = useRef<HTMLDivElement>(null);
 
-  // 👇 NUEVO: estado del panel de comentarios y conteos
   const [cmtPanel, setCmtPanel] = useState<{ open: boolean; recordId: number | null }>({ open: false, recordId: null });
   const [commentCounts, setCommentCounts] = useState<Record<number, number>>({});
 
@@ -84,7 +91,11 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   const containerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Cerrar menú de columna al hacer clic fuera / Escape / scroll
+  // Filtros / sort
+  const [filters, setFilters] = useState<FiltersValue>({ logic: 'AND', filters: [] });
+  const [sort, setSort] = useState<SortSpec[]>([]);
+  const [filtersUI, setFiltersUI] = useState<{ open: boolean; anchor: HTMLElement | null }>({ open: false, anchor: null });
+
   useEffect(() => {
     if (!columnMenu) return;
     function onDoc(e: MouseEvent) {
@@ -104,7 +115,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     };
   }, [columnMenu]);
 
-  // Cerrar menú de fila al hacer clic fuera / Escape / scroll
   useEffect(() => {
     if (!rowMenu) return;
     function onDoc(e: MouseEvent) {
@@ -124,7 +134,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     };
   }, [rowMenu]);
 
-  // Anchos por columna + estado de resize
   const [colWidths, setColWidths] = useState<Record<number, number>>({});
   const [resizing, setResizing] = useState<{ id: number; startX: number; startW: number } | null>(null);
 
@@ -146,48 +155,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     };
   }, [resizing]);
 
-  async function load() {
-    setLoading(true);
-    try {
-      const [f, r] = await Promise.all([
-        listFields(baseId, tableId),
-        queryRecords(baseId, tableId, { page, pageSize }),
-      ]);
-      const withOptions = await ensureSelectOptions(baseId, tableId, f.fields);
-      setFields(withOptions);
-      setRecords(r.records);
-      setTotal(r.total);
-
-      // Inicializa anchos para nuevas columnas
-      setColWidths((prev) => {
-        const next = { ...prev };
-        withOptions.forEach(ff => { if (next[ff.id] == null) next[ff.id] = DEFAULT_COL_W; });
-        return next;
-      });
-    } catch (e: any) {
-      setError(e?.message || 'No se pudo cargar');
-    } finally {
-      setLoading(false);
-    }
-  }
-  useEffect(() => { load(); /* eslint-disable-line */ }, [baseId, tableId, page, pageSize]);
-
-  // 👇 NUEVO: cargar conteos de comentarios para las filas visibles
-  useEffect(() => {
-    if (!records.length) { setCommentCounts({}); return; }
-    let alive = true;
-    (async () => {
-      try {
-        const ids = records.map(r => r.id);
-        const map = await countCommentsForRecords(baseId, tableId, ids);
-        if (alive) setCommentCounts(map);
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => { alive = false; };
-  }, [baseId, tableId, records]);
-
   async function ensureSelectOptions(baseId: number, tableId: number, fs: Field[]) {
     const selectIds = fs.filter(x => x.type === 'SINGLE_SELECT' || x.type === 'MULTI_SELECT').map(x => x.id);
     if (!selectIds.length) return fs;
@@ -204,24 +171,80 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
 
   function fieldById(id: number) { return fields.find((f) => f.id === id)!; }
 
+  // Carga con AbortController (ágil al mover filtros/paginación)
+  useEffect(() => {
+    let alive = true;
+    const ac = new AbortController();
+
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [f, r] = await Promise.all([
+          listFields(baseId, tableId),
+          queryRecords(baseId, tableId, {
+            page, pageSize,
+            logic: filters.logic,
+            filters: filters.filters,
+            sort,
+            signal: ac.signal,
+          }),
+        ]);
+        if (!alive) return;
+        const withOptions = await ensureSelectOptions(baseId, tableId, f.fields);
+        if (!alive) return;
+
+        setFields(withOptions);
+        setRecords(r.records);
+        setTotal(r.total);
+
+        setColWidths((prev) => {
+          const next = { ...prev };
+          withOptions.forEach(ff => { if (next[ff.id] == null) next[ff.id] = DEFAULT_COL_W; });
+          return next;
+        });
+      } catch (e: any) {
+        if (e?.name === 'AbortError') return;
+        if (!alive) return;
+        setError(e?.message || 'No se pudo cargar');
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+      ac.abort();
+    };
+  }, [baseId, tableId, page, pageSize, filters, sort]);
+
+  useEffect(() => {
+    if (!records.length) { setCommentCounts({}); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const ids = records.map(r => r.id);
+        const map = await countCommentsForRecords(baseId, tableId, ids);
+        if (alive) setCommentCounts(map);
+      } catch { /* ignore */ }
+    })();
+    return () => { alive = false; };
+  }, [baseId, tableId, records]);
+
   async function commitCell(recordId: number, fieldId: number, next: any) {
-    if (!effectivePerms.canUpdate) {
-      alert('No tienes permisos para editar registros en esta base.');
-      return;
-    }
+    if (!effectivePerms.canUpdate) { alert('No tienes permisos para editar registros en esta base.'); return; }
     try {
-      setRecords((prev) => prev.map((r) => (r.id === recordId ? { ...r, values: { ...r.values, [String(fieldId)]: next } } : r)));
+      setRecords((prev) => prev.map((r) =>
+        r.id === recordId ? { ...r, values: { ...r.values, [String(fieldId)]: next } } : r
+      ));
       await patchRecord(baseId, tableId, recordId, { [String(fieldId)]: next });
     } catch (e: any) {
-      alert(e?.message || 'No se pudo guardar'); load();
+      alert(e?.message || 'No se pudo guardar'); setPage(p => p);
     }
   }
 
   async function handleAddRow() {
-    if (!effectivePerms.canCreate) {
-      alert('No tienes permisos para crear registros.');
-      return;
-    }
+    if (!effectivePerms.canCreate) { alert('No tienes permisos para crear registros.'); return; }
     try {
       const r = await createRecord(baseId, tableId, {});
       setRecords((prev) => [...prev, { id: r.record.id, values: {} }]);
@@ -231,40 +254,27 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   }
 
   async function handleDeleteRow(id: number) {
-    if (!effectivePerms.canDelete) {
-      alert('No tienes permisos para eliminar registros.');
-      return;
-    }
+    if (!effectivePerms.canDelete) { alert('No tienes permisos para eliminar registros.'); return; }
     if (!confirm('¿Eliminar esta fila?')) return;
     try {
       await deleteRecord(baseId, tableId, id);
       setRecords((prev) => prev.filter((r) => r.id !== id));
       setTotal((t) => Math.max(0, t - 1));
-      // Limpia conteo si existía
-      setCommentCounts(prev => {
-        const n = { ...prev };
-        delete n[id];
-        return n;
-      });
+      setCommentCounts(prev => { const n = { ...prev }; delete n[id]; return n; });
     } catch (e: any) { alert(e?.message || 'No se pudo eliminar'); }
   }
 
   function openColumnMenu(e: React.MouseEvent, f: Field) {
-    if (!canManageFields) return; // solo admins/owner/schemaManage
+    if (!canManageFields) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     setColumnMenu({ field: f, x: rect.left, y: rect.bottom + 4 });
   }
 
-  // ===== Crear columna =====
   async function submitAddColumn() {
     if (!canManageFields) return;
     if (!newColName.trim()) return;
-
     const isSelect = newColType === 'SINGLE_SELECT' || newColType === 'MULTI_SELECT';
-    const cleaned = isSelect
-      ? newSelectOpts.map(s => s.trim()).filter(Boolean).map(label => ({ label }))
-      : undefined;
-
+    const cleaned = isSelect ? newSelectOpts.map(s => s.trim()).filter(Boolean).map(label => ({ label })) : undefined;
     try {
       await createField(baseId, tableId, {
         name: newColName.trim(),
@@ -272,9 +282,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
         options: isSelect ? (cleaned && cleaned.length ? cleaned : [{ label: 'Opción 1' }, { label: 'Opción 2' }]) : undefined,
       });
       setAddColOpen(false);
-      setNewColName('');
-      setNewColType('TEXT');
-      setNewSelectOpts(['Opción 1', 'Opción 2']);
+      setNewColName(''); setNewColType('TEXT'); setNewSelectOpts(['Opción 1', 'Opción 2']);
       const f = await listFields(baseId, tableId);
       const withOptions = await ensureSelectOptions(baseId, tableId, f.fields);
       setFields(withOptions);
@@ -286,7 +294,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     } catch (e: any) { alert(e?.message || 'No se pudo crear la columna'); }
   }
 
-  // ===== Renombrar columna =====
   async function submitRenameColumn() {
     if (!canManageFields) return;
     if (!renameOpen.field || !renameName.trim()) return;
@@ -297,16 +304,11 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     } catch (e: any) { alert(e?.message || 'No se pudo renombrar'); }
   }
 
-  // ===== Cambiar tipo =====
   async function submitChangeType() {
     if (!canManageFields) return;
     if (!typeOpen.field) return;
-
     const isSelect = typeValue === 'SINGLE_SELECT' || typeValue === 'MULTI_SELECT';
-    const cleaned = isSelect
-      ? typeSelectOpts.map(s => s.trim()).filter(Boolean).map(label => ({ label }))
-      : undefined;
-
+    const cleaned = isSelect ? typeSelectOpts.map(s => s.trim()).filter(Boolean).map(label => ({ label })) : undefined;
     try {
       await updateField(baseId, tableId, typeOpen.field.id, {
         type: typeValue,
@@ -332,11 +334,12 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   const usageByField = useMemo(() => {
     const used = new Map<number, boolean>();
     for (const f of fields) used.set(f.id, false);
-    for (const r of records) for (const fid of Object.keys(r.values)) if (r.values[fid] != null) used.set(Number(fid), true);
+    for (const r of records)
+      for (const fid of Object.keys(r.values))
+        if (r.values[fid] != null) used.set(Number(fid), true);
     return used;
   }, [fields, records]);
 
-  // Anchos actuales por campo
   const widths = fields.map(f => colWidths[f.id] ?? DEFAULT_COL_W);
   const gridTemplate = makeGridTemplate(widths);
   const rowStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: gridTemplate };
@@ -349,7 +352,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     setResizing({ id: fid, startX: e.clientX, startW });
   }
 
-  // === abrir menú de fila (click derecho) ===
   function openRowContextMenu(e: React.MouseEvent, recordId: number) {
     e.preventDefault();
     const x = Math.min(e.clientX, window.innerWidth - 220);
@@ -357,7 +359,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     setRowMenu({ recordId, x, y });
   }
 
-  // 👇 NUEVO: helper para actualizar badge del record activo
   function applyDeltaToRecord(recordId: number, delta: number) {
     setCommentCounts(prev => ({
       ...prev,
@@ -367,22 +368,28 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
 
   return (
     <div className="grid-card">
-      <div className="grid-toolbar">
-        <div className="muted">Registros: {total}</div>
-        <div className="ml-auto flex items-center gap-2">
-          <select className="select" value={pageSize} onChange={(e) => { setPage(1); setPageSize(Number(e.target.value)); }}>
-            {[10,25,50,100].map(n => <option key={n} value={n}>{n}/página</option>)}
-          </select>
-          <span className="muted">Página {page} / {Math.max(1, Math.ceil(total / pageSize))}</span>
-          <button className="icon-btn" onClick={() => setPage(p => Math.max(1, p - 1))}>◀</button>
-          <button className="icon-btn" onClick={() => setPage(p => Math.min(Math.ceil(total / pageSize) || 1, p + 1))}>▶</button>
-        </div>
-      </div>
+      <GridToolbar
+        total={total}
+        page={page}
+        pageSize={pageSize}
+        onChangePage={setPage}
+        onChangePageSize={(n) => { setPage(1); setPageSize(n); }}
+        onOpenFilters={(anchor) => setFiltersUI({ open: true, anchor })}
+      />
+
+      <GridFilters
+        open={filtersUI.open}
+        anchorEl={filtersUI.anchor}
+        fields={fields}
+        initial={filters}
+        scrollContainerRef={containerRef}
+        onApply={(f) => { setFilters(f); setPage(1); }}
+        onClose={() => setFiltersUI({ open: false, anchor: null })}
+      />
 
       <div className="grid-wrap" ref={containerRef}>
         {/* Header */}
         <div className="grid-row grid-header" style={rowStyle}>
-          {/* # */}
           <div className="grid-th id-col">#</div>
 
           {fields.map((f) => (
@@ -412,7 +419,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
             </div>
           ))}
 
-          {/* Add column */}
           <div className="grid-th add-col">
             {canManageFields && (
               <button
@@ -427,7 +433,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
               >+</button>
             )}
           </div>
-
         </div>
 
         {/* Rows */}
@@ -447,19 +452,16 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
               >
                 <div className="grid-td id-col">
                   <span>{rowNumber}</span>
-                  {/* Botón de comentarios */}
-                  
-                
-                  {commentCounts[r.id] > 0 && (
-  <button
-    className="icon-btn ml-1"
-    title={`Comentarios (${commentCounts[r.id]})`}
-    onClick={() => setCmtPanel({ open: true, recordId: r.id })}
-  >
-    💬
-  </button>
-)}
-                 
+
+                  {(commentCounts[r.id] ?? 0) > 0 && (
+                    <button
+                      className="icon-btn ml-1"
+                      title={`Comentarios (${commentCounts[r.id]})`}
+                      onClick={() => setCmtPanel({ open: true, recordId: r.id })}
+                    >
+                      💬
+                    </button>
+                  )}
                 </div>
 
                 {fields.map((f) => (
@@ -480,13 +482,11 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
                     )}
                   </div>
                 ))}
-
               </div>
             );
           })
         )}
 
-        {/* Add row bar */}
         {effectivePerms.canCreate && (
           <div className="grid-add-row">
             <button className="grid-add-btn" title="Agregar fila" onClick={handleAddRow}>+</button>
@@ -494,85 +494,76 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
         )}
       </div>
 
-      {/* Column context menu */}
+      {/* Column menu */}
       {columnMenu && canManageFields && (
-        <>
-          <div className="context-overlay" onClick={() => setColumnMenu(null)} />
-          <div
-            ref={menuRef}
-            className="context-panel"
-            style={{ position:'fixed', left:columnMenu.x, top:columnMenu.y }}
-          >
-            <div
-              className="menu-item"
-              onClick={() => {
-                setRenameOpen({ open:true, field:columnMenu.field });
-                setRenameName(columnMenu.field.name);
-                setColumnMenu(null);
-              }}
-            >Renombrar…</div>
-
-            <div
-              className="menu-item"
-              onClick={() => {
-                setTypeOpen({ open:true, field:columnMenu.field });
-                setTypeValue(columnMenu.field.type);
-                if (columnMenu.field.type === 'SINGLE_SELECT' || columnMenu.field.type === 'MULTI_SELECT') {
-                  setTypeSelectOpts((columnMenu.field.options ?? []).map(o => o.label));
-                } else {
-                  setTypeSelectOpts(['Opción 1','Opción 2']);
-                }
-                setColumnMenu(null);
-              }}
-            >Cambiar tipo…</div>
-
-            <div
-              className="menu-item-danger"
-              onClick={() => { handleDeleteColumn(columnMenu.field.id); setColumnMenu(null); }}
-            >Enviar a papelera</div>
-          </div>
-        </>
-      )}
-
-      {/* Row context menu */}
-      {rowMenu && (
-        <>
-          <div className="context-overlay" onClick={() => setRowMenu(null)} />
-          <div
-            ref={rowMenuRef}
-            className="context-panel"
-            style={{ position:'fixed', left:rowMenu.x, top:rowMenu.y, minWidth:220 }}
-          >
-            <div
-              className="menu-item"
-              onClick={() => {
-                setRowMenu(null);
-                setCmtPanel({ open: true, recordId: rowMenu.recordId });
-              }}
-            >comentarios</div>
-
-            {effectivePerms.canDelete && (
-              <div
-                className="menu-item-danger"
-                onClick={() => { handleDeleteRow(rowMenu.recordId); setRowMenu(null); }}
-              >Eliminar fila</div>
-            )}
-          </div>
-        </>
-      )}
-
-      {/* Modals esquema */}
-      {addColOpen && canManageFields && (
-        <Modal title="Nueva columna" onClose={() => setAddColOpen(false)} onConfirm={submitAddColumn} confirmText="Crear">
-          <FieldDefForm name={newColName} type={newColType} onName={setNewColName} onType={(t) => {
-            setNewColType(t);
-            if ((t === 'SINGLE_SELECT' || t === 'MULTI_SELECT') && newSelectOpts.length === 0) {
-              setNewSelectOpts(['Opción 1', 'Opción 2']);
+        <ColumnMenu
+          ref={menuRef}
+          field={columnMenu.field}
+          x={columnMenu.x}
+          y={columnMenu.y}
+          onClose={() => setColumnMenu(null)}
+          onRename={() => {
+            setRenameOpen({ open: true, field: columnMenu.field });
+            setRenameName(columnMenu.field.name);
+          }}
+          onChangeType={() => {
+            setTypeOpen({ open: true, field: columnMenu.field });
+            setTypeValue(columnMenu.field.type);
+            if (columnMenu.field.type === 'SINGLE_SELECT' || columnMenu.field.type === 'MULTI_SELECT') {
+              setTypeSelectOpts((columnMenu.field.options ?? []).map(o => o.label));
+            } else {
+              setTypeSelectOpts(['Opción 1', 'Opción 2']);
             }
-          }} />
+          }}
+          onDelete={() => handleDeleteColumn(columnMenu.field.id)}
+        />
+      )}
+
+      {/* Row menu */}
+      {rowMenu && (
+        <RowMenu
+          ref={rowMenuRef}
+          x={rowMenu.x}
+          y={rowMenu.y}
+          canDelete={effectivePerms.canDelete}
+          onClose={() => setRowMenu(null)}
+          onOpenComments={() => {
+            const rid = rowMenu.recordId;
+            setRowMenu(null);
+            setCmtPanel({ open: true, recordId: rid });
+          }}
+          onDelete={() => {
+            const rid = rowMenu.recordId;
+            handleDeleteRow(rid);
+            setRowMenu(null);
+          }}
+        />
+      )}
+
+      {/* Modals */}
+      {addColOpen && canManageFields && (
+        <Modal
+          title="Nueva columna"
+          onClose={() => setAddColOpen(false)}
+          onConfirm={submitAddColumn}
+          confirmText="Crear"
+        >
+          <FieldDefForm
+            name={newColName}
+            type={newColType}
+            onName={setNewColName}
+            onType={(t) => {
+              setNewColType(t);
+              if ((t === 'SINGLE_SELECT' || t === 'MULTI_SELECT') && newSelectOpts.length === 0) {
+                setNewSelectOpts(['Opción 1', 'Opción 2']);
+              }
+            }}
+          />
           {(newColType === 'SINGLE_SELECT' || newColType === 'MULTI_SELECT') && (
             <>
-              <div className="muted mt-2 text-xs">Define las opciones del {newColType === 'SINGLE_SELECT' ? 'Single Select' : 'Multi Select'}.</div>
+              <div className="muted mt-2 text-xs">
+                Define las opciones del {newColType === 'SINGLE_SELECT' ? 'Single Select' : 'Multi Select'}.
+              </div>
               <OptionEditor options={newSelectOpts} onChange={setNewSelectOpts} />
             </>
           )}
@@ -580,7 +571,12 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       )}
 
       {renameOpen.open && renameOpen.field && canManageFields && (
-        <Modal title="Renombrar columna" onClose={() => setRenameOpen({ open:false })} onConfirm={submitRenameColumn} confirmText="Guardar">
+        <Modal
+          title="Renombrar columna"
+          onClose={() => setRenameOpen({ open:false })}
+          onConfirm={submitRenameColumn}
+          confirmText="Guardar"
+        >
           <div className="field">
             <label className="label">Nombre</label>
             <input className="input" value={renameName} onChange={(e) => setRenameName(e.target.value)} />
@@ -589,7 +585,12 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       )}
 
       {typeOpen.open && typeOpen.field && canManageFields && (
-        <Modal title="Cambiar tipo" onClose={() => setTypeOpen({ open:false })} onConfirm={submitChangeType} confirmText="Cambiar">
+        <Modal
+          title="Cambiar tipo"
+          onClose={() => setTypeOpen({ open:false })}
+          onConfirm={submitChangeType}
+          confirmText="Cambiar"
+        >
           {usageByField.get(typeOpen.field.id!) ? (
             <div className="alert-error">Esta columna tiene datos. Si el backend lo impide, verás un error al guardar.</div>
           ) : null}
@@ -609,7 +610,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
         </Modal>
       )}
 
-      {/* 👇 NUEVO: Drawer de comentarios */}
       {cmtPanel.open && cmtPanel.recordId != null && (
         <CommentsPanel
           baseId={baseId}
@@ -622,264 +622,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       )}
 
       {error && <div className="alert-error mt-3">{error}</div>}
-    </div>
-  );
-}
-
-/* =========================
-   Cell Editors / Readonly view
-   ========================= */
-function ReadonlyCell({ field, value }: { field: Field; value: any }) {
-  if (value == null) return <span className="muted">—</span>;
-  if (field.type === 'SINGLE_SELECT') {
-    const hit = field.options?.find((o) => o.id === value);
-    return <span>{hit ? hit.label : String(value)}</span>;
-  }
-  if (field.type === 'MULTI_SELECT' && Array.isArray(value)) {
-    return <span>{value.map((id) => field.options?.find((o) => o.id === id)?.label ?? id).join(', ')}</span>;
-  }
-  if (field.type === 'CHECKBOX') return <span>{value ? '✓' : ''}</span>;
-  if (field.type === 'TIME' && typeof value === 'number') return <span>{toHHmm(value)}</span>;
-  return <span>{String(value)}</span>;
-}
-
-function CellEditor({ field, value, onCommit }: { field: Field; value: any; onCommit: (v: any) => void; }) {
-  switch (field.type) {
-    case 'TEXT':       return <TextInput value={value ?? ''} onCommit={onCommit} />;
-    case 'LONG_TEXT':  return <TextInput value={value ?? ''} onCommit={onCommit} multiline />;
-    case 'NUMBER':     return <NumberInput value={value} onCommit={onCommit} allowDecimal />;
-    case 'CURRENCY':   return <NumberInput value={value} onCommit={onCommit} allowDecimal />;
-    case 'CHECKBOX':   return (<label className="checkbox"><input type="checkbox" checked={Boolean(value)} onChange={(e)=>onCommit(e.target.checked)} /></label>);
-    case 'DATE':       return <input className="cell-input" type="date" value={value ? toDateInput(value) : ''} onChange={(e)=>onCommit(e.target.value || null)} />;
-    case 'DATETIME':   return <input className="cell-input" type="datetime-local" value={value ? toDateTimeLocal(value) : ''} onChange={(e)=>onCommit(e.target.value || null)} />;
-    case 'TIME':       return <input className="cell-input" type="time" value={value == null ? '' : toHHmm(value)} onChange={(e)=>onCommit(parseTimeToMinutes(e.target.value))} />;
-
-    case 'SINGLE_SELECT': {
-      const opts = field.options ?? [];
-      return (
-        <select className="cell-input" value={value ?? ''} onChange={(e)=>onCommit(e.target.value === '' ? null : Number(e.target.value))}>
-          <option value="">—</option>
-          {opts.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
-        </select>
-      );
-    }
-    case 'MULTI_SELECT': {
-      const opts = field.options ?? []; const arr: number[] = Array.isArray(value) ? value : [];
-      return <MultiSelect options={opts.map(o => ({ value:o.id, label:o.label }))} value={arr} onChange={onCommit} />;
-    }
-    default: return <span className="muted">—</span>;
-  }
-}
-
-/** Texto/LongText con buffer local + commit en blur/Enter/Escape */
-function TextInput({ value, onCommit, multiline=false }: { value: string; onCommit:(v:string|null)=>void; multiline?:boolean; }) {
-  const [buf, setBuf] = useState(value ?? ''); const editing = useRef(false); const ref = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
-  useEffect(() => { if (!editing.current) setBuf(value ?? ''); }, [value]);
-
-  function commit(){ editing.current=false; const v = buf === '' ? null : buf; if (v !== (value ?? null)) onCommit(v); }
-  function cancel(){ editing.current=false; setBuf(value ?? ''); ref.current?.blur(); }
-
-  const commonProps = {
-    className:'cell-input', value:buf,
-    onChange:(e:any)=>{ editing.current=true; setBuf(e.target.value); },
-    onBlur:commit,
-    onKeyDown:(e:any)=>{ if(e.key==='Enter' && !multiline){ e.preventDefault(); commit(); (e.target as HTMLElement).blur(); } else if(e.key==='Escape'){ e.preventDefault(); cancel(); } },
-    ref
-  };
-  return multiline ? <textarea rows={2} {...(commonProps as any)} /> : <input {...(commonProps as any)} />;
-}
-
-/** Número/Moneda con buffer string y commit en blur/Enter */
-function NumberInput({ value, onCommit, allowDecimal=true }: { value:number|null|undefined; onCommit:(v:number|null)=>void; allowDecimal?:boolean; }) {
-  const [buf, setBuf] = useState(value==null ? '' : String(value)); const editing = useRef(false); const ref = useRef<HTMLInputElement>(null);
-  useEffect(()=>{ if(!editing.current) setBuf(value==null ? '' : String(value)); }, [value]);
-  function parseNumber(s:string){ if(s.trim()==='') return null; const n = allowDecimal ? parseFloat(s) : parseInt(s,10); return Number.isFinite(n) ? n : null; }
-  function commit(){ editing.current=false; const parsed = parseNumber(buf); if(parsed !== (value ?? null)) onCommit(parsed); }
-  function cancel(){ editing.current=false; setBuf(value==null ? '' : String(value)); ref.current?.blur(); }
-  return (
-    <input className="cell-input" inputMode={allowDecimal?'decimal':'numeric'} value={buf}
-      onChange={(e)=>{ editing.current=true; setBuf(e.target.value); }}
-      onBlur={commit}
-      onKeyDown={(e)=>{ if(e.key==='Enter'){ e.preventDefault(); commit(); (e.target as HTMLElement).blur(); } else if(e.key==='Escape'){ e.preventDefault(); cancel(); } }}
-      ref={ref}
-    />
-  );
-}
-
-/** MULTISELECT con panel flotante en PORTAL (siempre encima) */
-function MultiSelect({ options, value, onChange }: { options:Array<{value:number;label:string}>; value:number[]; onChange:(v:number[])=>void; }) {
-  const [open, setOpen] = useState(false);
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const [pos, setPos] = useState<{left:number; top:number; width:number}>({ left:0, top:0, width:220 });
-
-  const label = value.length ? `${value.length} seleccionadas` : '—';
-
-  function syncPosition() {
-    if (!btnRef.current) return;
-    const r = btnRef.current.getBoundingClientRect();
-    setPos({ left: r.left, top: r.bottom + 4, width: r.width });
-  }
-
-  useLayoutEffect(() => {
-    if (!open) return;
-    syncPosition();
-    const onResize = () => syncPosition();
-    const onScroll = () => syncPosition();
-    window.addEventListener('resize', onResize);
-    window.addEventListener('scroll', onScroll, true);
-    return () => {
-      window.removeEventListener('resize', onResize);
-      window.removeEventListener('scroll', onScroll, true);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    function onDoc(e: MouseEvent) {
-      const target = e.target as Node;
-      const panel = document.getElementById('ms-portal');
-      if (panel?.contains(target) || btnRef.current?.contains(target)) return;
-      setOpen(false);
-    }
-    function onKey(e: KeyboardEvent){ if(e.key === 'Escape') setOpen(false); }
-    document.addEventListener('mousedown', onDoc);
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
-  }, [open]);
-
-  function toggle(v:number){
-    if(value.includes(v)) onChange(value.filter(x=>x!==v));
-    else onChange([...value, v]);
-  }
-
-  return (
-    <div className="ms-wrap">
-      <button ref={btnRef} className="ms-input" onClick={() => setOpen(o => !o)} aria-expanded={open}>{label}</button>
-
-      {open && createPortal(
-        <div id="ms-portal" className="ms-portal-panel" style={{ left:pos.left, top:pos.top, minWidth:pos.width }}>
-          {options.map(o => (
-            <label key={o.value} className="ms-row">
-              <input type="checkbox" checked={value.includes(o.value)} onChange={()=>toggle(o.value)} />
-              <span>{o.label}</span>
-            </label>
-          ))}
-        </div>,
-        document.body
-      )}
-    </div>
-  );
-}
-
-/* =========================
-   Helpers de formato
-   ========================= */
-function toDataTypeAttr(t: FieldType) {
-  switch (t) {
-    case 'NUMBER':
-    case 'CURRENCY': return 'number';
-    case 'CHECKBOX': return 'checkbox';
-    case 'DATE': return 'date';
-    case 'DATETIME': return 'datetime';
-    case 'TIME': return 'time';
-    default: return 'text';
-  }
-}
-function printCellTitle(field: Field, v: any): string {
-  if (v == null) return '';
-  if (field.type === 'SINGLE_SELECT') {
-    const hit = field.options?.find((o) => o.id === v);
-    return hit ? hit.label : String(v);
-  }
-  if (field.type === 'MULTI_SELECT' && Array.isArray(v)) {
-    return v.map((id) => field.options?.find((o) => o.id === id)?.label ?? id).join(', ');
-  }
-  return String(v);
-}
-function toDateInput(v:any){ const d=new Date(v); if(Number.isNaN(d.getTime())) return ''; const yyyy=d.getFullYear(); const mm=String(d.getMonth()+1).padStart(2,'0'); const dd=String(d.getDate()).padStart(2,'0'); return `${yyyy}-${mm}-${dd}`; }
-function toDateTimeLocal(v:any){ const d=new Date(v); if(Number.isNaN(d.getTime())) return ''; const yyyy=d.getFullYear(); const mm=String(d.getMonth()+1).padStart(2,'0'); const dd=String(d.getDate()).padStart(2,'0'); const hh=String(d.getHours()).padStart(2,'0'); const mi=String(d.getMinutes()).padStart(2,'0'); return `${yyyy}-${mm}-${dd}T${hh}:${mi}`; }
-function toHHmm(minutes:number){ const hh=Math.floor(minutes/60); const mm=minutes%60; return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`; }
-function parseTimeToMinutes(s: string | null): number | null {
-  if (!s) return null;
-  const m = /^(\d{1,2}):(\d{2})$/.exec(s.trim());
-  if (!m) return null;
-  const hh = Number(m[1]), mm = Number(m[2]);
-  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
-  return hh * 60 + mm;
-}
-
-/* =========================
-   UI mínimas: Modal + FieldDefForm + OptionEditor
-   ========================= */
-function Modal({
-  title, children, onClose, onConfirm, confirmText='Guardar'
-}: { title:string; children:any; onClose:()=>void; onConfirm:()=>void; confirmText?:string; }) {
-  return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" onClick={onClose}>
-      <div className="modal-card" onClick={(e)=>e.stopPropagation()}>
-        <div className="modal-header">
-          <strong>{title}</strong>
-          <button className="modal-close" onClick={onClose}>✕</button>
-        </div>
-        <div className="modal-body">{children}</div>
-        <div className="modal-footer">
-          <button className="btn" onClick={onClose}>Cancelar</button>
-          <button className="btn-primary" onClick={onConfirm}>{confirmText}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function FieldDefForm({
-  name, type, onName, onType
-}: { name:string; type:FieldType; onName:(v:string)=>void; onType:(v:FieldType)=>void; }) {
-  return (
-    <div className="grid gap-2">
-      <div className="field">
-        <label className="label">Nombre</label>
-        <input className="input" value={name} onChange={(e)=>onName(e.target.value)} />
-      </div>
-      <div className="field">
-        <label className="label">Tipo</label>
-        <select className="select" value={type} onChange={(e)=>onType(e.target.value as FieldType)}>
-          {FIELD_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-        </select>
-      </div>
-    </div>
-  );
-}
-
-/** Editor simple de opciones para SELECT */
-function OptionEditor({
-  options, onChange,
-}: { options: string[]; onChange: (opts: string[]) => void }) {
-  function update(i: number, v: string) {
-    const next = options.slice();
-    next[i] = v;
-    onChange(next);
-  }
-  function add() {
-    onChange([...options, `Opción ${options.length + 1}`]);
-  }
-  function remove(i: number) {
-    const next = options.slice();
-    next.splice(i, 1);
-    onChange(next.length ? next : ['Opción 1']);
-  }
-  return (
-    <div className="mt-2">
-      <div className="grid gap-2">
-        {options.map((opt, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <input className="input" value={opt} onChange={(e) => update(i, e.target.value)} placeholder={`Opción ${i+1}`} />
-            <button className="btn" onClick={() => remove(i)} title="Eliminar">–</button>
-          </div>
-        ))}
-      </div>
-      <div className="mt-2">
-        <button className="btn" onClick={add}>Agregar opción</button>
-      </div>
     </div>
   );
 }

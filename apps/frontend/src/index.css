@@ -101,14 +101,15 @@
   .header-actions{ @apply relative flex items-center gap-2; }
   .role-pill     { @apply px-2 py-1 rounded-full text-[11px] font-extrabold bg-indigo-50 text-indigo-800; }
   .avatar-btn    { @apply w-9 h-9 rounded-full border border-slate-200 bg-slate-100 font-extrabold cursor-pointer; }
+
   .dropdown-overlay { @apply fixed inset-0 z-40 bg-transparent; }
   .dropdown-panel   { @apply absolute right-0 top-12 z-50 w-72 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden; }
   .dropdown-header  { @apply p-3 border-b border-slate-200; }
   .dropdown-email   { @apply text-xs text-slate-500; }
   .menu-item        { @apply w-full text-left bg-white px-3 py-2 rounded-lg cursor-pointer font-semibold hover:bg-slate-100; }
   .menu-item-eliminar { @apply w-full text-left bg-white px-3 py-2 rounded-lg cursor-pointer font-semibold text-red-700 hover:bg-slate-100; }
-
   .menu-item-danger{ @apply w-full text-left bg-white px-3 py-2 rounded-lg cursor-pointer font-semibold text-red-700 hover:bg-slate-100; }
+
   .ws-sidebar { @apply w-[260px] flex flex-col bg-white border-r border-slate-200; }
 
   .list-toolbar    { @apply flex items-center justify-between gap-3 my-4; }
@@ -119,6 +120,7 @@
   .base-card-title { @apply font-extrabold text-left cursor-pointer bg-transparent border-0 p-0 hover:underline; }
   .base-card-actions { @apply flex items-center gap-1.5; }
   .base-card-meta  { @apply mt-2 text-sm text-slate-600; }
+
   .icon-btn        { @apply border border-slate-200 bg-slate-50 rounded-md px-2 py-1 cursor-pointer hover:bg-slate-100; }
   .pagination      { @apply my-4 flex items-center justify-center gap-2; }
 
@@ -138,7 +140,33 @@
 
   /* ===== Context menus reutilizables ===== */
   .context-overlay { @apply fixed inset-0 z-[1400] bg-transparent; }
-  .context-panel   { @apply fixed z-[1450] bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden min-w-[200px]; }
+  /* ↑ overlay genérico si alguna vez quieres usarlo; GridFilters ya cierra por click-outside sin overlay */
+
+  /* ✅ Panel genérico: lo usamos para filtros, menús de columna y fila.
+     – z-index alto para pasar el sticky header.
+     – max-width para evitar que se desborde en pantallas pequeñas.
+     – overflow oculto (el scroll se maneja dentro cuando hace falta). */
+  .context-panel{
+    @apply fixed z-[1450] bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden min-w-[200px];
+    max-width: calc(100vw - 16px);
+    /* sombreado suave compatible */
+    box-shadow: 0 10px 30px rgba(0,0,0,.12), 0 2px 10px rgba(0,0,0,.08);
+  }
+
+  /* 🔒 Estilos específicos cuando el panel actúa como "popover de filtros".
+     (Si en el futuro añades la clase `context-panel--filters`, ya queda listo.)
+     Nota: GridFilters fija width / max-height vía inline style; esto no rompe otros menús. */
+  .context-panel--filters{
+    width: 360px;
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+
+  /* Inputs dentro de popovers (mejor ergonomía) */
+  .context-panel .select[multiple]{
+    min-height: 90px;
+  }
+
   .context-panel .menu-item,
   .context-panel .menu-item-danger { @apply px-3 py-2 text-sm; }
 
@@ -258,7 +286,8 @@
 @layer components {
   .content--wide { @apply max-w-none; }
   .content--edge { @apply px-0 max-w-none; }
-   .cmt-overlay { @apply fixed inset-0 bg-black/30 z-[1600]; }
+
+  .cmt-overlay { @apply fixed inset-0 bg-black/30 z-[1600]; }
   .cmt-drawer  { @apply fixed right-0 top-0 h-full w-[420px] max-w-[95vw] bg-white border-l border-slate-200 shadow-2xl z-[1650] grid grid-rows-[auto,1fr,auto]; }
   .cmt-header  { @apply px-4 py-3 border-b border-slate-200 flex items-center justify-between; }
   .cmt-list    { @apply overflow-auto p-3 space-y-3; }

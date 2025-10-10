@@ -1,19 +1,28 @@
 // apps/frontend/src/api/records.ts
 import { API_URL } from './http';
 
-export type SortSpec = { kind: 'field'; fieldId: number; dir: 'asc' | 'desc'; nulls?: 'first' | 'last' };
+export type SortSpec = {
+  kind: 'field';
+  fieldId: number;
+  dir: 'asc' | 'desc';
+  nulls?: 'first' | 'last';
+};
+
+type QueryParams = {
+  page?: number;
+  pageSize?: number;
+  filters?: any[];
+  logic?: 'AND' | 'OR';
+  sort?: SortSpec[];
+  all?: boolean;
+  /** Mejora UX: permite cancelar peticiones anteriores si el usuario cambia rápido. */
+  signal?: AbortSignal;
+};
 
 export async function queryRecords(
   baseId: number,
   tableId: number,
-  params: {
-    page?: number;
-    pageSize?: number;
-    filters?: any[];
-    logic?: 'AND' | 'OR';
-    sort?: SortSpec[];
-    all?: boolean;
-  } = {}
+  params: QueryParams = {}
 ) {
   const body = {
     all: params.all ?? false,
@@ -23,15 +32,22 @@ export async function queryRecords(
     filters: params.filters ?? [],
     sort: params.sort ?? [],
   };
+
   const res = await fetch(`${API_URL}/bases/${baseId}/tables/${tableId}/records/query`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: params.signal, // <-- aquí
   });
+
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json?.error || `Error ${res.status}`);
-  return json as { ok: boolean; total: number; records: Array<{ id: number; values: Record<string, any> }> };
+  return json as {
+    ok: boolean;
+    total: number;
+    records: Array<{ id: number; values: Record<string, any> }>;
+  };
 }
 
 export async function createRecord(baseId: number, tableId: number, values: Record<string, any> = {}) {
