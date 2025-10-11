@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+// apps/frontend/src/components/grid/GridFilters.tsx
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import type React from 'react';
 import type { Field } from '../../api/fields';
@@ -25,7 +26,6 @@ type Props = {
   initial?: FiltersValue;
   onApply: (val: FiltersValue) => void;
   onClose: () => void;
-  /** contenedor scrollable del grid para cerrar al hacer scroll */
   scrollContainerRef?: React.RefObject<HTMLElement>;
 };
 
@@ -38,6 +38,14 @@ function toMinutesMaybe(v: string | number) {
   }
   const n = Number(s);
   return Number.isFinite(n) ? n : undefined;
+}
+
+function move<T>(arr: T[], from: number, to: number) {
+  if (from === to) return arr;
+  const copy = [...arr];
+  const [item] = copy.splice(from, 1);
+  copy.splice(to, 0, item);
+  return copy;
 }
 
 export default function GridFilters({
@@ -56,10 +64,16 @@ export default function GridFilters({
     initial?.filters?.length ? initial!.filters!.map(f => ({ ...f })) : []
   );
 
-  // ===================== CIERRE ROBUSTO =====================
+  // Sincroniza al abrir (por si cambiaron filtros desde fuera)
   useEffect(() => {
     if (!open) return;
+    setLogic(initial?.logic ?? 'AND');
+    setRows(initial?.filters?.length ? initial!.filters!.map(f => ({ ...f })) : []);
+  }, [open, initial]);
 
+  // Cierre robusto
+  useEffect(() => {
+    if (!open) return;
     const onDoc = (e: MouseEvent) => {
       const t = e.target as Node;
       if (panelRef.current?.contains(t)) return;
@@ -72,59 +86,32 @@ export default function GridFilters({
     document.addEventListener('mousedown', onDoc, true);
     document.addEventListener('keydown', onKey);
     scrollContainerRef?.current?.addEventListener('scroll', onScroll, true);
-    window.addEventListener('scroll', onScroll, true);
-    window.addEventListener('resize', onScroll);
 
     return () => {
       document.removeEventListener('mousedown', onDoc, true);
       document.removeEventListener('keydown', onKey);
       scrollContainerRef?.current?.removeEventListener('scroll', onScroll, true);
-      window.removeEventListener('scroll', onScroll, true);
-      window.removeEventListener('resize', onScroll);
     };
   }, [open, anchorEl, onClose, scrollContainerRef]);
 
-  // ===================== POSICIONAMIENTO (con flip) =====================
-  type Coords = { left: number; top: number; maxH: number };
-  const [coords, setCoords] = useState<Coords | null>(null);
-
-  useLayoutEffect(() => {
-    if (!open || !anchorEl) return;
-
+  // Posición (viewport) + límites
+  const style = useMemo<React.CSSProperties>(() => {
+    if (!anchorEl) return { display: 'none' };
     const r = anchorEl.getBoundingClientRect();
-    const width = 360;
+    const width = 650;
     const margin = 6;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-
-    // valor provisional hasta medir el panel
-    let left = Math.min(Math.max(8, r.left), vw - width - 8);
-    let top = r.bottom + margin;
-    let maxH = Math.min(Math.round(vh * 0.6), vh - 16);
-
-    setCoords({ left, top, maxH });
-
-    // después de pintar, medimos el alto real y decidimos flip
-    requestAnimationFrame(() => {
-      const ph = panelRef.current?.offsetHeight ?? Math.round(vh * 0.6);
-      const desired = Math.min(ph, Math.round(vh * 0.6));
-
-      // ¿cabe debajo?
-      const spaceBelow = vh - (r.bottom + margin) - 8;
-      const spaceAbove = r.top - 8;
-      if (spaceBelow < Math.min(desired, 200) && spaceAbove > spaceBelow) {
-        // colócalo arriba
-        top = Math.max(8, r.top - desired - margin);
-        maxH = Math.min(desired, r.top - 8 - margin);
-      } else {
-        // colócalo abajo
-        top = Math.min(r.bottom + margin, vh - 8 - desired);
-        maxH = Math.min(desired, vh - top - 8);
-      }
-      left = Math.min(Math.max(8, r.left), vw - width - 8);
-      setCoords({ left, top, maxH });
-    });
-  }, [open, anchorEl, rows.length, logic]);
+    const left = Math.min(Math.max(8, r.left), window.innerWidth - width - 8);
+    const top = Math.min(r.bottom + margin, window.innerHeight - 8);
+    return {
+      position: 'fixed',
+      top,
+      left,
+      width,
+      maxHeight: '60vh',
+      overflowY: 'auto',
+      zIndex: 1450,
+    };
+  }, [anchorEl]);
 
   const fieldMap = useMemo(() => new Map(fields.map(f => [f.id, f])), [fields]);
 
@@ -228,6 +215,32 @@ export default function GridFilters({
     setRows(prev => prev.filter((_, i) => i !== idx));
   };
 
+  // ===== Drag & Drop (reordenar condiciones) =====
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [overIdx, setOverIdx] = useState<number | null>(null);
+
+  function onDragStart(e: React.DragEvent, idx: number) {
+    setDragIdx(idx);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(idx)); // requerido por Firefox
+  }
+  function onDragOver(e: React.DragEvent, idx: number) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (overIdx !== idx) setOverIdx(idx);
+  }
+  function onDrop(e: React.DragEvent, idx: number) {
+    e.preventDefault();
+    if (dragIdx == null) return;
+    setRows(prev => move(prev, dragIdx, idx));
+    setDragIdx(null);
+    setOverIdx(null);
+  }
+  function onDragEnd() {
+    setDragIdx(null);
+    setOverIdx(null);
+  }
+
   const handleApply = () => {
     const filters: FilterCond[] = rows
       .map(r => {
@@ -303,24 +316,10 @@ export default function GridFilters({
     onClose();
   };
 
-  if (!open || !coords) return null;
+  if (!open) return null;
 
   const panel = (
-    <div
-      ref={panelRef}
-      className="context-panel context-panel--filters"
-      style={{
-        position: 'fixed',
-        left: coords.left,
-        top: coords.top,
-        width: 560,
-        maxHeight: coords.maxH,
-        overflowY: 'auto',
-        zIndex: 2500, // por encima del header sticky y otros popovers
-      }}
-      role="dialog"
-      aria-modal="true"
-    >
+    <div ref={panelRef} className="context-panel" style={style}>
       <div className="p-2">
         <div className="mb-2 flex items-center gap-2">
           <span className="muted">Coinciden</span>
@@ -339,8 +338,32 @@ export default function GridFilters({
               const f = fieldMap.get(Number(r.fieldId) || 0) ?? fields[0];
               const ops = opsByType[f.type];
 
+              const isDragging = dragIdx === idx;
+              const isOver = overIdx === idx;
+
               return (
-                <div key={idx} className="flex items-center gap-2">
+                <div
+                  key={idx}
+                  onDragOver={(e) => onDragOver(e, idx)}
+                  onDrop={(e) => onDrop(e, idx)}
+                  className={[
+                    'flex items-center gap-2 rounded-md px-2 py-1',
+                    isOver ? 'bg-slate-50 border border-cyan-300' : 'border border-transparent',
+                    isDragging ? 'opacity-60' : 'opacity-100'
+                  ].join(' ')}
+                >
+                  {/* handle de arrastre */}
+                  <button
+                    className="icon-btn cursor-move"
+                    aria-label="Reordenar"
+                    draggable
+                    onDragStart={(e) => onDragStart(e, idx)}
+                    onDragEnd={onDragEnd}
+                    title="Arrastra para reordenar"
+                  >
+                    ⋮⋮
+                  </button>
+
                   <select
                     className="select"
                     value={r.fieldId ?? f.id}
@@ -467,7 +490,7 @@ export default function GridFilters({
                     );
                   })()}
 
-                  <button className="icon-btn" title="Eliminar" onClick={() => removeRow(idx)}>✕</button>
+                  <button className="icon-btn ml-auto" title="Eliminar" onClick={() => removeRow(idx)}>✕</button>
                 </div>
               );
             })}

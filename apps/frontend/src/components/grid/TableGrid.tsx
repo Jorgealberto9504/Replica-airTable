@@ -22,6 +22,30 @@ import ColumnMenu from './ColumnMenu';
 import RowMenu from './RowMenu';
 
 import GridFilters, { type FiltersValue } from './GridFilters';
+import GridSorts from './GridSorts';
+
+/* ===== lastChange (como lo envía tu backend) ===== */
+type LastChange =
+  | {
+      kind: 'CELL';
+      fieldId: number | null;
+      fieldName: string | null;
+      user: { id: number; fullName: string } | null;
+      at: string; // ISO
+    }
+  | {
+      kind: 'COMMENT';
+      commentId: number;
+      body: string;
+      user: { id: number; fullName: string } | null;
+      at: string; // ISO
+    };
+
+type UIRecord = {
+  id: number;
+  values: Record<string, any>;
+  lastChange?: LastChange;
+};
 
 type RecordPerms = {
   canCreate: boolean;
@@ -45,9 +69,52 @@ const DEFAULT_COL_W = 180;
 const MIN_COL_W = 120;
 const MAX_COL_W = 800;
 
-function makeGridTemplate(widths: number[]) {
+/* Ancho por defecto para “Última actividad” */
+const DEFAULT_LAST_W = 260;
+
+/** Grid: ID + columnas dinámicas + Última actividad + “Agregar columna” */
+function makeGridTemplate(widths: number[], lastW: number) {
   const mids = widths.map(w => `${w}px`).join(' ');
-  return `var(--grid-id-w) ${mids} var(--grid-addcol-w)`;
+  return `var(--grid-id-w) ${mids} ${lastW}px var(--grid-addcol-w)`;
+}
+
+/* ===== helpers de formateo ===== */
+function timeAgoFromISO(iso?: string | null) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 45) return 'hace unos segundos';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `hace ${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `hace ${h} h`;
+  const dys = Math.floor(h / 24);
+  if (dys < 30) return `hace ${dys} d`;
+  return d.toLocaleString();
+}
+
+function lastChangeInline(lc?: LastChange) {
+  if (!lc) return '—';
+  const who = lc.user?.fullName ? ` · ${lc.user.fullName}` : '';
+  const whenStr = timeAgoFromISO(lc.at);
+  const when = whenStr ? ` · ${whenStr}` : '';
+  if (lc.kind === 'COMMENT') {
+    const body = lc.body?.trim() ? `“${lc.body.trim().slice(0, 60)}${lc.body.length > 60 ? '…' : ''}”` : 'comentario';
+    return `Comentario: ${body}${who}${when}`;
+  }
+  const field = lc.fieldName ?? 'Celda';
+  return `${field}${who}${when}`;
+}
+
+function lastChangeTitle(lc?: LastChange) {
+  if (!lc) return 'Sin actividad';
+  const base =
+    lc.kind === 'COMMENT'
+      ? `Comentario${lc.user?.fullName ? ' de ' + lc.user.fullName : ''}`
+      : `Edición en ${lc.fieldName ?? 'celda'}`;
+  const at = new Date(lc.at);
+  return `${base} · ${at.toLocaleString()}`;
 }
 
 export default function TableGrid({ baseId, tableId, perms, canManageFields }: Props) {
@@ -63,7 +130,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   const [pageSize, setPageSize] = useState(25);
 
   const [fields, setFields] = useState<Field[]>([]);
-  const [records, setRecords] = useState<Array<{ id: number; values: Record<string, any> }>>([]);
+  const [records, setRecords] = useState<UIRecord[]>([]);
   const [total, setTotal] = useState(0);
 
   const [hoverCol, setHoverCol] = useState<number | null>(null);
@@ -91,11 +158,13 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   const containerRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Filtros / sort
+  // ===== Filtros / sort
   const [filters, setFilters] = useState<FiltersValue>({ logic: 'AND', filters: [] });
   const [sort, setSort] = useState<SortSpec[]>([]);
   const [filtersUI, setFiltersUI] = useState<{ open: boolean; anchor: HTMLElement | null }>({ open: false, anchor: null });
+  const [sortUI, setSortUI] = useState<{ open: boolean; anchor: HTMLElement | null }>({ open: false, anchor: null });
 
+  // ===== Cerrar menú de columna
   useEffect(() => {
     if (!columnMenu) return;
     function onDoc(e: MouseEvent) {
@@ -115,6 +184,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     };
   }, [columnMenu]);
 
+  // ===== Cerrar menú de fila
   useEffect(() => {
     if (!rowMenu) return;
     function onDoc(e: MouseEvent) {
@@ -134,15 +204,26 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     };
   }, [rowMenu]);
 
+  // ===== Anchos por columna + resize
   const [colWidths, setColWidths] = useState<Record<number, number>>({});
-  const [resizing, setResizing] = useState<{ id: number; startX: number; startW: number } | null>(null);
+  const [lastColW, setLastColW] = useState<number>(DEFAULT_LAST_W);
+
+  type Resizing =
+    | { kind: 'field'; id: number; startX: number; startW: number }
+    | { kind: 'last'; startX: number; startW: number }
+    | null;
+  const [resizing, setResizing] = useState<Resizing>(null);
 
   useEffect(() => {
     function onMove(ev: MouseEvent) {
       if (!resizing) return;
       const dx = ev.clientX - resizing.startX;
       const next = Math.max(MIN_COL_W, Math.min(MAX_COL_W, resizing.startW + dx));
-      setColWidths((prev) => ({ ...prev, [resizing.id]: next }));
+      if (resizing.kind === 'field') {
+        setColWidths((prev) => ({ ...prev, [resizing.id]: next }));
+      } else {
+        setLastColW(next);
+      }
     }
     function onUp() { setResizing(null); }
     if (resizing) {
@@ -155,6 +236,23 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     };
   }, [resizing]);
 
+  function startResizeField(fid: number, e: React.MouseEvent) {
+    e.preventDefault();
+    if (!canManageFields) return;
+    const th = (e.currentTarget as HTMLElement).parentElement as HTMLElement;
+    const startW = th.getBoundingClientRect().width;
+    setResizing({ kind: 'field', id: fid, startX: e.clientX, startW });
+  }
+  function startResizeLast(e: React.MouseEvent) {
+    e.preventDefault();
+    // usaremos el mismo permiso que el resto de columnas (si quieres permitirlo a todos, quita este if)
+    if (!canManageFields) return;
+    const th = (e.currentTarget as HTMLElement).parentElement as HTMLElement;
+    const startW = th.getBoundingClientRect().width;
+    setResizing({ kind: 'last', startX: e.clientX, startW });
+  }
+
+  // ===== Helpers
   async function ensureSelectOptions(baseId: number, tableId: number, fs: Field[]) {
     const selectIds = fs.filter(x => x.type === 'SINGLE_SELECT' || x.type === 'MULTI_SELECT').map(x => x.id);
     if (!selectIds.length) return fs;
@@ -168,10 +266,9 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     }));
     return copy;
   }
-
   function fieldById(id: number) { return fields.find((f) => f.id === id)!; }
 
-  // Carga con AbortController (ágil al mover filtros/paginación)
+  // ===== Carga
   useEffect(() => {
     let alive = true;
     const ac = new AbortController();
@@ -182,22 +279,23 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       try {
         const [f, r] = await Promise.all([
           listFields(baseId, tableId),
-          queryRecords(baseId, tableId, {
+          queryRecords(baseId, tableId, ({
             page, pageSize,
             logic: filters.logic,
             filters: filters.filters,
             sort,
             signal: ac.signal,
-          }),
+          } as any)),
         ]);
         if (!alive) return;
         const withOptions = await ensureSelectOptions(baseId, tableId, f.fields);
         if (!alive) return;
 
         setFields(withOptions);
-        setRecords(r.records);
+        setRecords(r.records as UIRecord[]);
         setTotal(r.total);
 
+        // Inicializa anchos para nuevas columnas
         setColWidths((prev) => {
           const next = { ...prev };
           withOptions.forEach(ff => { if (next[ff.id] == null) next[ff.id] = DEFAULT_COL_W; });
@@ -218,6 +316,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     };
   }, [baseId, tableId, page, pageSize, filters, sort]);
 
+  // ===== Conteos de comentarios
   useEffect(() => {
     if (!records.length) { setCommentCounts({}); return; }
     let alive = true;
@@ -231,15 +330,42 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     return () => { alive = false; };
   }, [baseId, tableId, records]);
 
+  // ===== CRUD / estados optimistas
+
+  function setLastChange(recordId: number, lc: LastChange) {
+    setRecords(prev => prev.map(r => (r.id === recordId ? { ...r, lastChange: lc } : r)));
+  }
+
   async function commitCell(recordId: number, fieldId: number, next: any) {
     if (!effectivePerms.canUpdate) { alert('No tienes permisos para editar registros en esta base.'); return; }
+    const field = fieldById(fieldId);
+
+    // Optimista: valor y última actividad
+    const nowISO = new Date().toISOString();
+    setRecords((prev) =>
+      prev.map((r) =>
+        r.id === recordId
+          ? {
+              ...r,
+              values: { ...r.values, [String(fieldId)]: next },
+              lastChange: {
+                kind: 'CELL',
+                fieldId,
+                fieldName: field?.name ?? null,
+                user: null,
+                at: nowISO,
+              },
+            }
+          : r
+      )
+    );
+
     try {
-      setRecords((prev) => prev.map((r) =>
-        r.id === recordId ? { ...r, values: { ...r.values, [String(fieldId)]: next } } : r
-      ));
       await patchRecord(baseId, tableId, recordId, { [String(fieldId)]: next });
+      // si quisieras revalidar desde backend, aquí podrías hacer un fetch de la fila
     } catch (e: any) {
-      alert(e?.message || 'No se pudo guardar'); setPage(p => p);
+      alert(e?.message || 'No se pudo guardar');
+      setPage(p => p); // fuerza re-render para revalidar en la siguiente carga
     }
   }
 
@@ -270,6 +396,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     setColumnMenu({ field: f, x: rect.left, y: rect.bottom + 4 });
   }
 
+  // ===== Crear / renombrar / tipo / borrar columna
   async function submitAddColumn() {
     if (!canManageFields) return;
     if (!newColName.trim()) return;
@@ -341,16 +468,8 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   }, [fields, records]);
 
   const widths = fields.map(f => colWidths[f.id] ?? DEFAULT_COL_W);
-  const gridTemplate = makeGridTemplate(widths);
+  const gridTemplate = makeGridTemplate(widths, lastColW);
   const rowStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: gridTemplate };
-
-  function startResize(fid: number, e: React.MouseEvent) {
-    e.preventDefault();
-    if (!canManageFields) return;
-    const th = (e.currentTarget as HTMLElement).parentElement as HTMLElement;
-    const startW = th.getBoundingClientRect().width;
-    setResizing({ id: fid, startX: e.clientX, startW });
-  }
 
   function openRowContextMenu(e: React.MouseEvent, recordId: number) {
     e.preventDefault();
@@ -364,6 +483,16 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       ...prev,
       [recordId]: Math.max(0, (prev[recordId] ?? 0) + delta),
     }));
+    // si se añadió un comentario, reflejar en “Última actividad” sin recargar
+    if (delta > 0) {
+      setLastChange(recordId, {
+        kind: 'COMMENT',
+        commentId: -1,
+        body: 'Nuevo comentario',
+        user: null,
+        at: new Date().toISOString(),
+      });
+    }
   }
 
   return (
@@ -375,8 +504,12 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
         onChangePage={setPage}
         onChangePageSize={(n) => { setPage(1); setPageSize(n); }}
         onOpenFilters={(anchor) => setFiltersUI({ open: true, anchor })}
+        onOpenSorts={(anchor) => setSortUI({ open: true, anchor })}
+        sortCount={sort.length}
+        filtersCount={filters.filters.length}
       />
 
+      {/* Panel Filtros */}
       <GridFilters
         open={filtersUI.open}
         anchorEl={filtersUI.anchor}
@@ -385,6 +518,17 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
         scrollContainerRef={containerRef}
         onApply={(f) => { setFilters(f); setPage(1); }}
         onClose={() => setFiltersUI({ open: false, anchor: null })}
+      />
+
+      {/* Panel Ordenar */}
+      <GridSorts
+        open={sortUI.open}
+        anchorEl={sortUI.anchor}
+        fields={fields}
+        initial={sort}
+        scrollContainerRef={containerRef}
+        onApply={(s) => { setSort(s); setPage(1); }}
+        onClose={() => setSortUI({ open: false, anchor: null })}
       />
 
       <div className="grid-wrap" ref={containerRef}>
@@ -414,10 +558,20 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
               </div>
 
               {canManageFields && (
-                <span className="col-resizer" onMouseDown={(e) => startResize(f.id, e)} />
+                <span className="col-resizer" onMouseDown={(e) => startResizeField(f.id, e)} />
               )}
             </div>
           ))}
+
+          {/* ===== Columna “Última actividad” (redimensionable) ===== */}
+          <div className="grid-th lastchange-col" title="Última actividad">
+            <div className="th-inner">
+              <span className="th-title">Última actividad</span>
+            </div>
+            {canManageFields && (
+              <span className="col-resizer" onMouseDown={startResizeLast} />
+            )}
+          </div>
 
           <div className="grid-th add-col">
             {canManageFields && (
@@ -482,6 +636,15 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
                     )}
                   </div>
                 ))}
+
+                {/* Celda “Última actividad” */}
+                <div
+                  className="grid-td lastchange-col"
+                  title={lastChangeTitle(r.lastChange)}
+                >
+                  {lastChangeInline(r.lastChange)}
+                </div>
+                {/* Nota: no rendereamos la celda “add-col” en filas (queda la pista vacía) */}
               </div>
             );
           })

@@ -43,8 +43,12 @@
     /* ====== GRID VARS (Airtable-like) ====== */
     --grid-id-w: 80px;
     --grid-min-col: 180px;
-    --grid-actions-w: 72px;  /* ancho col acciones (derecha) */
-    --grid-addcol-w: 220px;  /* ancho col “Agregar columna” (derecha) */
+    --grid-actions-w: 72px;
+    --grid-addcol-w: 220px;
+
+    /* ⬇️ NUEVA: fallback para “Última actividad” (usamos px desde React, pero queda por si acaso) */
+    --grid-lastchange-w: 260px;
+
     --grid-row-h: 40px;
   }
 
@@ -138,39 +142,24 @@
   .modal-body   { @apply p-4; }
   .modal-close  { @apply icon-btn; }
 
-  /* ===== Context menus reutilizables ===== */
   .context-overlay { @apply fixed inset-0 z-[1400] bg-transparent; }
-  /* ↑ overlay genérico si alguna vez quieres usarlo; GridFilters ya cierra por click-outside sin overlay */
 
-  /* ✅ Panel genérico: lo usamos para filtros, menús de columna y fila.
-     – z-index alto para pasar el sticky header.
-     – max-width para evitar que se desborde en pantallas pequeñas.
-     – overflow oculto (el scroll se maneja dentro cuando hace falta). */
   .context-panel{
     @apply fixed z-[1450] bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden min-w-[200px];
     max-width: calc(100vw - 16px);
-    /* sombreado suave compatible */
     box-shadow: 0 10px 30px rgba(0,0,0,.12), 0 2px 10px rgba(0,0,0,.08);
   }
 
-  /* 🔒 Estilos específicos cuando el panel actúa como "popover de filtros".
-     (Si en el futuro añades la clase `context-panel--filters`, ya queda listo.)
-     Nota: GridFilters fija width / max-height vía inline style; esto no rompe otros menús. */
   .context-panel--filters{
     width: 360px;
     max-height: 60vh;
     overflow-y: auto;
   }
 
-  /* Inputs dentro de popovers (mejor ergonomía) */
-  .context-panel .select[multiple]{
-    min-height: 90px;
-  }
-
+  .context-panel .select[multiple]{ min-height: 90px; }
   .context-panel .menu-item,
   .context-panel .menu-item-danger { @apply px-3 py-2 text-sm; }
 
-  /* Tabs */
   .tabs-wrap { @apply relative mb-3; }
   .tabs-wrap::after { content:""; position:absolute; left:0; right:0; bottom:0; height:1px; background: var(--border); pointer-events:none; }
   .tabs-scroller { overflow-x: auto; overflow-y: hidden; -ms-overflow-style: none; scrollbar-width: none; background: var(--tabs-bg); }
@@ -206,11 +195,9 @@
 
   .grid-wrap { max-height: calc(100vh - 270px); overflow: auto; background: #fff; }
 
-  /* Header y filas usan la MISMA plantilla de columnas (inline en TSX). */
   .grid-header { position: sticky; top: 0; z-index: 5; background: #f8fafc; }
   .grid-row { display: grid; }
 
-  /* Separadores */
   .grid-header .grid-th,
   .grid-td, .grid-th { border-right: 1px solid #e5e7eb; }
   .grid-row > * { border-bottom: 1px solid #e5e7eb; }
@@ -219,27 +206,21 @@
   .grid-th { @apply font-bold text-slate-800; background: #f8fafc; }
   .id-col { @apply text-xs text-slate-500; }
 
-  /* ===== SIN ANCLAJES ===== */
   .frozen-left { position: static; left: auto; z-index: auto; box-shadow: none; background: inherit; }
   .grid-header .frozen-left { background: inherit; }
   .grid-row .frozen-left { background: inherit; }
 
-  /* “Agregar columna” y “Acciones” sin sticky */
   .add-col   { position: static; right: auto; z-index: auto; background: inherit; border-left: 1px solid #e5e7eb; display:flex; align-items:center; justify-content:center; }
   .add-col-cell { visibility: hidden; pointer-events: none; }
   .actions-col { position: static; right: auto; z-index: auto; background: inherit; border-left: 1px solid #e5e7eb; text-align: center; }
 
-  /* Barra agregar fila */
   .grid-add-row { @apply sticky bottom-0 z-10 bg-slate-50 border-t border-slate-200 p-3 flex; justify-content: flex-start; }
 
-  /* Inputs */
   .cell-input { @apply w-full bg-transparent outline-none px-2 py-1 rounded-md border border-transparent focus:border-cyan-300 focus:ring-2 focus:ring-cyan-200; }
 
-  /* MultiSelect (botón) */
   .ms-wrap { position: relative; }
   .ms-input { @apply w-full text-left bg-white border border-transparent rounded-md px-2 py-1 hover:border-slate-200; }
 
-  /* Panel del MultiSelect via PORTAL (fuera del grid) */
   .ms-portal-panel {
     position: fixed;
     z-index: 2500;
@@ -248,15 +229,12 @@
   }
   .ms-row { @apply flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-50; }
 
-  /* Hover + zebra */
   .grid-row:nth-child(even) .grid-td { background: #fcfdff; }
   .grid-row:hover .grid-td,
   .grid-row:hover .id-col { background: #f6f9fc; transition: background-color .15s ease; }
 
-  /* Truncado */
   .grid-td, .grid-th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-  /* Tipos */
   .grid-td[data-type="number"],
   .grid-td[data-type="currency"],
   .grid-td[data-type="percent"] { text-align: right; font-variant-numeric: tabular-nums; }
@@ -265,7 +243,6 @@
   .grid-td[data-type="datetime"],
   .grid-td[data-type="time"] { text-align: right; }
 
-  /* Menú caret a la derecha + resizer */
   .grid-th { position: relative; padding-right: 28px; }
   .th-menu-btn{
     position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
@@ -280,9 +257,10 @@
   }
   .col-resizer::after{ content:""; position:absolute; top:0; bottom:0; left:2px; width:1px; background:transparent; }
   .grid-th:hover .col-resizer::after{ background:#cfd8e3; }
-}
 
-/* Utilidades de ancho de contenido */
+  /* ⬇️ NUEVO: estilitos mínimos para la columna de última actividad */
+  .lastchange-col { color: #334155; }
+}
 @layer components {
   .content--wide { @apply max-w-none; }
   .content--edge { @apply px-0 max-w-none; }
