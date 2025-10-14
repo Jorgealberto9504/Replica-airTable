@@ -1,7 +1,7 @@
 // apps/frontend/src/pages/components/WorkspaceSidebar.tsx
-// Sidebar de Workspaces con menú contextual y modal renombrar (sin estilos inline fijos)
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { MoreVertical } from 'lucide-react';
 import type { Workspace } from '../../api/workspaces';
 import { listMyWorkspaces, updateWorkspace, deleteWorkspace } from '../../api/workspaces';
 import { confirmToast } from '../../ui/confirmToast';
@@ -40,11 +40,7 @@ export default function WorkspaceSidebar({
 
   useEffect(() => {
     (async () => {
-      try {
-        await reload();
-      } finally {
-        setLoading(false);
-      }
+      try { await reload(); } finally { setLoading(false); }
     })();
   }, []);
 
@@ -161,16 +157,20 @@ export default function WorkspaceSidebar({
   return (
     <div className="h-full flex flex-col p-3 gap-2">
       <div ref={scrollRef} className="overflow-y-auto pr-1">
+        {/* Explorar */}
         <button
           onClick={() => { setOpenMenuId(null); onSelect(0); }}
-          className={`w-full text-left rounded-md px-3 py-2 mb-2 ${
-            selectedId === 0 ? 'bg-indigo-50 font-extrabold' : 'hover:bg-slate-100'
+          className={`w-full text-left rounded-lg px-3 py-2 mb-2 transition ${
+            selectedId === 0
+              ? 'bg-indigo-100 font-bold text-indigo-900'
+              : 'hover:bg-slate-100 text-slate-700'
           }`}
         >
           Explorar
           <div className="text-xs text-slate-500 mt-0.5">Miembro + públicas</div>
         </button>
 
+        {/* Workspaces */}
         {loading ? (
           <div className="text-slate-500 p-2">Cargando…</div>
         ) : items.length === 0 ? (
@@ -180,8 +180,10 @@ export default function WorkspaceSidebar({
             <div
               key={w.id}
               onClick={() => { setOpenMenuId(null); onSelect(w.id); }}
-              className={`relative flex items-center gap-2 px-2.5 py-2 mb-1.5 rounded-md cursor-pointer ${
-                selectedId === w.id ? 'bg-indigo-50 font-extrabold' : 'hover:bg-slate-100'
+              className={`relative flex items-center gap-2 px-2.5 py-2 mb-1.5 rounded-md cursor-pointer transition ${
+                selectedId === w.id
+                  ? 'bg-indigo-100 font-bold text-indigo-900'
+                  : 'hover:bg-slate-100 text-slate-700'
               }`}
             >
               <div className="flex-1 min-w-0 truncate">{w.name}</div>
@@ -198,9 +200,9 @@ export default function WorkspaceSidebar({
                     return next;
                   });
                 }}
-                className="text-lg leading-none px-1.5 py-0.5 rounded-md hover:bg-slate-100"
+                className="p-1 rounded-md hover:bg-slate-200 transition"
               >
-                ⋮
+                <MoreVertical size={18} />
               </button>
 
               {openMenuId === w.id &&
@@ -208,11 +210,21 @@ export default function WorkspaceSidebar({
                   <div
                     ref={menuRef}
                     onClick={(e) => e.stopPropagation()}
-                    className="fixed min-w-[180px] bg-white border border-black/10 rounded-xl shadow-xl z-[3000] overflow-hidden"
+                    className="fixed min-w-[180px] bg-white border border-slate-200 rounded-xl shadow-lg z-[3000] overflow-hidden animate-fade-in"
                     style={{ top: menuPos.top, left: menuPos.left }}
                   >
-                    <button className="menu-item" onClick={() => openRenameModal(w)}>Cambiar nombre</button>
-                    <button className="menu-item-danger" onClick={() => handleDelete(w)}>Eliminar</button>
+                    <button
+                      className="w-full px-3 py-2 text-left text-sm hover:bg-slate-100 transition"
+                      onClick={() => openRenameModal(w)}
+                    >
+                      Cambiar nombre
+                    </button>
+                    <button
+                      className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 transition"
+                      onClick={() => handleDelete(w)}
+                    >
+                      Eliminar
+                    </button>
                   </div>,
                   document.body
                 )}
@@ -221,20 +233,22 @@ export default function WorkspaceSidebar({
         )}
       </div>
 
+      {/* Crear nuevo */}
       {canCreate && onOpenCreate && (
         <div className="mt-auto pt-3 border-t border-slate-200 mb-12">
-          <button onClick={onOpenCreate} className="btn-primary w-full text-center font-extrabold">
-            + Nuevo workspace
+          <button onClick={onOpenCreate} className="btn-primary w-full text-center font-semibold">
+            Nuevo workspace
           </button>
         </div>
       )}
 
+      {/* Modal renombrar */}
       {renameTarget &&
         createPortal(
           <div className="modal-backdrop" onClick={() => !saving && setRenameTarget(null)}>
-            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-              <div className="modal-header">
-                <h3 className="m-0 font-bold">Cambiar nombre</h3>
+            <div className="modal-card w-[400px]" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header border-b border-slate-200">
+                <h3 className="m-0 font-semibold text-lg">Cambiar nombre</h3>
                 <button className="modal-close" onClick={() => !saving && setRenameTarget(null)}>×</button>
               </div>
 
@@ -245,12 +259,14 @@ export default function WorkspaceSidebar({
                   onChange={(e) => setRenameValue(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && !saving) confirmRename(); }}
                   placeholder="Nombre del workspace"
-                  className="input"
+                  className="input w-full"
                 />
               </div>
 
               <div className="modal-footer justify-end gap-2">
-                <button className="btn" onClick={() => !saving && setRenameTarget(null)} disabled={saving}>Cancelar</button>
+                <button className="btn" onClick={() => !saving && setRenameTarget(null)} disabled={saving}>
+                  Cancelar
+                </button>
                 <button className="btn-primary" onClick={confirmRename} disabled={saving || !renameValue.trim()}>
                   {saving ? 'Guardando…' : 'Guardar'}
                 </button>

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
+import { createPortal } from 'react-dom';
 import type { Comment } from '../../api/comments';
 import {
   createComment,
@@ -16,10 +17,12 @@ type Props = {
   onDeltaCount?: (delta: number) => void;
 };
 
-// 🧠 cache simple en memoria: evita volver a pedir los mismos comentarios
+// Cache simple en memoria para no reconsultar de más
 const commentCache = new Map<string, Comment[]>();
 
-export default function CommentsPanel({
+type LocalComment = Comment & { __optimistic?: boolean };
+
+function CommentsPanelInner({
   baseId,
   tableId,
   recordId,
@@ -27,28 +30,35 @@ export default function CommentsPanel({
   onClose,
   onDeltaCount,
 }: Props) {
+  const cacheKey = `${baseId}-${tableId}-${recordId}`;
+
   const [loading, setLoading] = useState(false);
-  const [items, setItems] = useState<Comment[]>([]);
+  const [items, setItems] = useState<LocalComment[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [text, setText] = useState('');
-  const listRef = useRef<HTMLDivElement>(null);
+  const [sending, setSending] = useState(false);
 
-  const cacheKey = `${baseId}-${tableId}-${recordId}`;
+  const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Cerrar con Escape
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   useEffect(() => {
     let alive = true;
+
     const cached = commentCache.get(cacheKey);
+    if (cached) setItems(cached);
 
-    // ⚡ Muestra al instante los últimos comentarios guardados (cache local)
-    if (cached && alive) {
-      setItems(cached);
-      setLoading(true);
-    } else {
-      setItems([]);
-      setLoading(true);
-    }
+    setLoading(true);
+    setErr(null);
 
-    // 🚀 Carga asíncrona sin bloquear renderizado
     listComments(baseId, tableId, recordId, 1, 200)
       .then((r) => {
         if (!alive) return;
@@ -71,46 +81,56 @@ export default function CommentsPanel({
 
   function scrollToBottom() {
     requestAnimationFrame(() => {
-      listRef.current?.scrollTo({
-        top: listRef.current.scrollHeight,
-        behavior: 'smooth',
-      });
+      const el = listRef.current;
+      if (!el) return;
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
     });
   }
 
   async function handleSend() {
     const body = text.trim();
-    if (!body) return;
-    setText('');
+    if (!body || sending) return;
+    setSending(true);
 
+    // Optimista
+    setText('');
     const tempId = -Date.now();
-    const optimistic: Comment = {
+    const optimistic: LocalComment = {
       id: tempId,
       body,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       createdBy: undefined,
       updatedBy: undefined,
+      __optimistic: true,
     };
     setItems((prev) => [...prev, optimistic]);
     scrollToBottom();
 
-  try {
-  const r = await createComment(baseId, tableId, recordId, body);
-  setItems((prev) => prev.map((c) => (c.id === tempId ? r.comment : c)));
+    try {
+      const r = await createComment(baseId, tableId, recordId, body);
+      setItems((prev) =>
+        prev.map((c) => (c.id === tempId ? (r.comment as LocalComment) : c))
+      );
 
-  // ✅ Actualizamos cache correctamente
-  const current = commentCache.get(cacheKey) || [];
-  commentCache.set(cacheKey, [
-    ...current.filter((p) => p.id !== tempId),
-    r.comment,
-  ]);
+      // Actualiza cache
+      const current = commentCache.get(cacheKey) || [];
+      commentCache.set(
+        cacheKey,
+        [...current.filter((c) => c.id !== tempId), r.comment] as Comment[]
+      );
 
-  onDeltaCount?.(1);
-} catch (e: any) {
-  setItems((prev) => prev.filter((c) => c.id !== tempId));
-  alert(e?.message || 'No se pudo enviar el comentario');
-}
+      onDeltaCount?.(1);
+    } catch (e: any) {
+      // revertir optimista
+      setItems((prev) => prev.filter((c) => c.id !== tempId));
+      alert(e?.message || 'No se pudo enviar el comentario');
+      // regresa el texto para que el usuario no lo pierda
+      setText(body);
+      inputRef.current?.focus();
+    } finally {
+      setSending(false);
+    }
   }
 
   async function handleDelete(id: number) {
@@ -133,9 +153,7 @@ export default function CommentsPanel({
       setItems((prev) =>
         prev.map((c) => (c.id === id ? { ...c, body: newBody } : c))
       );
-      const updated = items.map((c) =>
-        c.id === id ? { ...c, body: newBody } : c
-      );
+      const updated = items.map((c) => (c.id === id ? { ...c, body: newBody } : c));
       commentCache.set(cacheKey, updated);
     } catch (e: any) {
       alert(e?.message || 'No se pudo editar el comentario');
@@ -145,13 +163,20 @@ export default function CommentsPanel({
   function formatMeta(c: Comment) {
     const who = c.createdBy?.fullName || 'Usuario';
     const dt = new Date(c.createdAt);
-    return `${who} · ${dt.toLocaleString()}`;
+    const edited =
+      c.updatedAt && c.updatedAt !== c.createdAt ? ' · editado' : '';
+    return `${who} · ${dt.toLocaleString()}${edited}`;
   }
 
   return (
     <>
       <div className="cmt-overlay" onClick={onClose} />
-      <aside className="cmt-drawer" role="dialog" aria-modal="true">
+      <aside
+        className="cmt-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-busy={loading ? 'true' : 'false'}
+      >
         <header className="cmt-header">
           <strong>Comentarios</strong>
           <button className="cmt-close" onClick={onClose} aria-label="Cerrar">
@@ -160,7 +185,7 @@ export default function CommentsPanel({
         </header>
 
         <div ref={listRef} className="cmt-list">
-          {/* 💨 Esqueleto rápido mientras carga */}
+          {/* Skeleton */}
           {loading && items.length === 0 && (
             <div className="cmt-skeleton">
               {Array.from({ length: 4 }).map((_, i) => (
@@ -169,7 +194,31 @@ export default function CommentsPanel({
             </div>
           )}
 
-          {err && <div className="cmt-error">{err}</div>}
+          {/* Error + reintentar */}
+          {err && (
+            <div className="cmt-error">
+              <div className="mb-2">{err}</div>
+              <button
+                className="btn"
+                onClick={() => {
+                  // fuerza recarga
+                  commentCache.delete(cacheKey);
+                  setErr(null);
+                  setLoading(true);
+                  listComments(baseId, tableId, recordId, 1, 200)
+                    .then((r) => {
+                      commentCache.set(cacheKey, r.comments);
+                      setItems(r.comments);
+                      scrollToBottom();
+                    })
+                    .catch((e: any) => setErr(e?.message || 'No se pudo recargar'))
+                    .finally(() => setLoading(false));
+                }}
+              >
+                Reintentar
+              </button>
+            </div>
+          )}
 
           {!loading && items.length === 0 && !err && (
             <div className="cmt-empty">No hay comentarios.</div>
@@ -179,10 +228,10 @@ export default function CommentsPanel({
             <CommentItem
               key={c.id}
               comment={c}
+              meta={formatMeta(c)}
               canEditDelete={canComment}
               onDelete={() => handleDelete(c.id)}
               onEdit={(txt) => handleUpdate(c.id, txt)}
-              meta={formatMeta(c)}
             />
           ))}
         </div>
@@ -191,20 +240,28 @@ export default function CommentsPanel({
           {canComment ? (
             <div className="cmt-compose">
               <textarea
+                ref={inputRef}
                 className="cmt-input"
                 rows={2}
                 placeholder="Escribe un comentario…"
                 value={text}
+                disabled={sending}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
+                  const isEnter = e.key === 'Enter';
+                  if ((isEnter && !e.shiftKey) || (isEnter && (e.ctrlKey || e.metaKey))) {
                     e.preventDefault();
                     handleSend();
                   }
                 }}
               />
-              <button className="btn-primary cmt-send" onClick={handleSend}>
-                Enviar
+              <button
+                className="btn-primary cmt-send"
+                onClick={handleSend}
+                disabled={!text.trim() || sending}
+                aria-busy={sending ? 'true' : 'false'}
+              >
+                {sending ? 'Enviando…' : 'Enviar'}
               </button>
             </div>
           ) : (
@@ -216,14 +273,14 @@ export default function CommentsPanel({
   );
 }
 
-function CommentItem({
+const CommentItem = memo(function CommentItem({
   comment,
   meta,
   canEditDelete,
   onDelete,
   onEdit,
 }: {
-  comment: Comment;
+  comment: LocalComment;
   meta: string;
   canEditDelete: boolean;
   onDelete: () => void;
@@ -237,8 +294,12 @@ function CommentItem({
   return (
     <div className="cmt-item">
       <div className="cmt-avatar">{initials(comment.createdBy?.fullName ?? 'U')}</div>
+
       <div className="cmt-bubble">
-        <div className="cmt-meta">{meta}</div>
+        <div className="cmt-meta">
+          {meta}
+          {comment.__optimistic && <span className="muted ml-2">(enviando…)</span>}
+        </div>
 
         {!editing ? (
           <div className="cmt-bodytext">{comment.body}</div>
@@ -248,6 +309,20 @@ function CommentItem({
             rows={3}
             value={buf}
             onChange={(e) => setBuf(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.key === 'Enter' && (e.ctrlKey || e.metaKey)) || (e.key === 'Enter' && !e.shiftKey)) {
+                e.preventDefault();
+                const v = buf.trim();
+                if (!v) return;
+                onEdit(v);
+                setEditing(false);
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setEditing(false);
+                setBuf(comment.body);
+              }
+            }}
           />
         )}
 
@@ -291,11 +366,16 @@ function CommentItem({
       </div>
     </div>
   );
-}
+});
 
 function initials(name: string) {
   const parts = name.trim().split(/\s+/);
   const a = parts[0]?.[0] ?? '';
   const b = parts[1]?.[0] ?? '';
   return (a + b).toUpperCase() || 'U';
+}
+
+export default function CommentsPanel(props: Props) {
+  // Portal al <body> para que el drawer flote sobre toda la UI
+  return createPortal(<CommentsPanelInner {...props} />, document.body);
 }

@@ -1,13 +1,13 @@
-// apps/backend/src/routes/records.routes.ts
 import { Router } from 'express';
 import { requireAuth } from '../middlewares/auth.middleware.js';
-import { guard } from '../permissions/guard.js'; // ⬅️ AÑADIR
+import { guard } from '../permissions/guard.js';
 import {
   listRecords,
   createRecord,
   patchRecord,
   deleteRecord,
   queryRecords,
+  bootstrapGrid,          // ⬅️ nuevo
   listTrashedRecords,
   restoreRecord,
   deleteRecordPermanent,
@@ -24,6 +24,9 @@ router.use(requireAuth);
 router.get('/',            guard('records:read'),   listRecords);
 router.post('/',           guard('records:create'), createRecord);
 router.post('/query',      guard('records:read'),   queryRecords);
+
+/* NUEVO: Bootstrap (ponlo ANTES de '/:recordId') */
+router.post('/bootstrap',  guard('records:read'),   bootstrapGrid);
 
 router.patch('/:recordId', guard('records:update'), patchRecord);
 router.delete('/:recordId',guard('records:delete'), deleteRecord);

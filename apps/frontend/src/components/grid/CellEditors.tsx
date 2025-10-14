@@ -4,26 +4,60 @@ import { createPortal } from 'react-dom';
 import type { Field, FieldType } from '../../api/fields';
 
 /* =========================
+   Estilos base
+   ========================= */
+const inputBaseCls =
+  'w-full px-2 py-1 text-sm border border-gray-300 rounded bg-white ' +
+  'focus:outline-none focus:ring-2 focus:ring-blue-500';
+
+/* =========================
    Expuestos al grid
    ========================= */
 export function ReadonlyCell({ field, value }: { field: Field; value: any }) {
-  if (value == null) return <span className="muted">—</span>;
+  if (value == null) return <span className="text-gray-400">—</span>;
+
   if (field.type === 'SINGLE_SELECT') {
     const hit = field.options?.find((o) => o.id === value);
-    return <span>{hit ? hit.label : String(value)}</span>;
-  }
-  if (field.type === 'MULTI_SELECT' && Array.isArray(value)) {
+    const label = hit ? hit.label : String(value);
     return (
-      <span>
-        {value
-          .map((id) => field.options?.find((o) => o.id === id)?.label ?? id)
-          .join(', ')}
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+        {label}
       </span>
     );
   }
-  if (field.type === 'CHECKBOX') return <span>{value ? '✓' : ''}</span>;
-  if (field.type === 'TIME' && typeof value === 'number') return <span>{toHHmm(value)}</span>;
-  return <span>{String(value)}</span>;
+
+  if (field.type === 'MULTI_SELECT' && Array.isArray(value)) {
+    const labels = value.map(
+      (id) => field.options?.find((o) => o.id === id)?.label ?? id
+    );
+    if (labels.length === 0) return <span className="text-gray-400">—</span>;
+    return (
+      <span className="flex flex-wrap gap-1">
+        {labels.map((lbl, i) => (
+          <span
+            key={`${lbl}-${i}`}
+            className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800"
+          >
+            {lbl}
+          </span>
+        ))}
+      </span>
+    );
+  }
+
+  if (field.type === 'CHECKBOX') {
+    return (
+      <span className="inline-flex items-center justify-center">
+        {value ? '✓' : ''}
+      </span>
+    );
+  }
+
+  if (field.type === 'TIME' && typeof value === 'number') {
+    return <span className="text-gray-800">{toHHmm(value)}</span>;
+  }
+
+  return <span className="text-gray-800">{String(value)}</span>;
 }
 
 export function CellEditor({
@@ -46,18 +80,19 @@ export function CellEditor({
       return <NumberInput value={value} onCommit={onCommit} allowDecimal />;
     case 'CHECKBOX':
       return (
-        <label className="checkbox">
+        <label className="inline-flex items-center justify-center w-full">
           <input
             type="checkbox"
             checked={Boolean(value)}
             onChange={(e) => onCommit(e.target.checked)}
+            className="h-4 w-4 text-blue-600 rounded focus:ring-blue-500"
           />
         </label>
       );
     case 'DATE':
       return (
         <input
-          className="cell-input"
+          className={inputBaseCls}
           type="date"
           value={value ? toDateInput(value) : ''}
           onChange={(e) => onCommit(e.target.value || null)}
@@ -66,7 +101,7 @@ export function CellEditor({
     case 'DATETIME':
       return (
         <input
-          className="cell-input"
+          className={inputBaseCls}
           type="datetime-local"
           value={value ? toDateTimeLocal(value) : ''}
           onChange={(e) => onCommit(e.target.value || null)}
@@ -75,7 +110,7 @@ export function CellEditor({
     case 'TIME':
       return (
         <input
-          className="cell-input"
+          className={inputBaseCls}
           type="time"
           value={value == null ? '' : toHHmm(value)}
           onChange={(e) => onCommit(parseTimeToMinutes(e.target.value))}
@@ -85,7 +120,7 @@ export function CellEditor({
       const opts = field.options ?? [];
       return (
         <select
-          className="cell-input"
+          className={inputBaseCls}
           value={value ?? ''}
           onChange={(e) =>
             onCommit(e.target.value === '' ? null : Number(e.target.value))
@@ -112,7 +147,7 @@ export function CellEditor({
       );
     }
     default:
-      return <span className="muted">—</span>;
+      return <span className="text-gray-400">—</span>;
   }
 }
 
@@ -181,7 +216,7 @@ function TextInput({
   }
 
   const commonProps = {
-    className: 'cell-input',
+    className: inputBaseCls,
     value: buf,
     onChange: (e: any) => {
       editing.current = true;
@@ -243,7 +278,7 @@ function NumberInput({
 
   return (
     <input
-      className="cell-input"
+      className={inputBaseCls}
       inputMode={allowDecimal ? 'decimal' : 'numeric'}
       value={buf}
       onChange={(e) => {
@@ -283,7 +318,10 @@ function MultiSelect({
     width: 220,
   });
 
-  const label = value.length ? `${value.length} seleccionadas` : '—';
+  const label =
+    value.length === 0
+      ? '—'
+      : `${value.length} ${value.length === 1 ? 'seleccionada' : 'seleccionadas'}`;
 
   function syncPosition() {
     if (!btnRef.current) return;
@@ -329,10 +367,10 @@ function MultiSelect({
   }
 
   return (
-    <div className="ms-wrap">
+    <div className="relative">
       <button
         ref={btnRef}
-        className="ms-input"
+        className={`${inputBaseCls} text-left truncate`}
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
       >
@@ -343,19 +381,25 @@ function MultiSelect({
         createPortal(
           <div
             id="ms-portal"
-            className="ms-portal-panel"
+            className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg p-1"
             style={{ left: pos.left, top: pos.top, minWidth: pos.width }}
           >
-            {options.map((o) => (
-              <label key={o.value} className="ms-row">
-                <input
-                  type="checkbox"
-                  checked={value.includes(o.value)}
-                  onChange={() => toggle(o.value)}
-                />
-                <span>{o.label}</span>
-              </label>
-            ))}
+            <div className="max-h-60 overflow-auto p-1">
+              {options.map((o) => (
+                <label
+                  key={o.value}
+                  className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer text-sm"
+                >
+                  <input
+                    type="checkbox"
+                    checked={value.includes(o.value)}
+                    onChange={() => toggle(o.value)}
+                    className="h-4 w-4 text-blue-600 rounded focus:ring-blue-500"
+                  />
+                  <span className="text-gray-800">{o.label}</span>
+                </label>
+              ))}
+            </div>
           </div>,
           document.body
         )}

@@ -1,4 +1,3 @@
-// apps/frontend/src/components/grid/GridSorts.tsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import type React from 'react';
@@ -18,7 +17,8 @@ type Props = {
 type Dir = 'asc' | 'desc';
 type Nulls = 'first' | 'last' | '';
 
-const DEFAULT_WIDTH = 360;
+const MIN_W = 320;   // ancho mínimo cómodo
+const MAX_W = 720;   // límite superior, deja que el contenido mande dentro de este rango
 
 const ASC_LABEL: Record<string, string> = {
   TEXT: 'A → Z',
@@ -85,22 +85,28 @@ export default function GridSorts({
     };
   }, [open, anchorEl, onClose, scrollContainerRef]);
 
-  // Posición/estilo panel
+  // Posición/estilo panel (ancho fluido)
   const style = useMemo<React.CSSProperties>(() => {
     if (!anchorEl) return { display: 'none' };
     const r = anchorEl.getBoundingClientRect();
-    const width = 650;
     const margin = 6;
-    const left = Math.min(Math.max(8, r.left), window.innerWidth - width - 8);
+
+    const maxWidth = Math.min(window.innerWidth - 16, MAX_W);
+    const minWidth = Math.min(maxWidth, MIN_W);
+    const left = Math.min(Math.max(8, r.left), window.innerWidth - maxWidth - 8);
     const top = Math.min(r.bottom + margin, window.innerHeight - 8);
+    const maxHeight = Math.min(window.innerHeight - top - 8, Math.round(window.innerHeight * 0.7));
+
     return {
       position: 'fixed',
       top,
       left,
-      width,
-      zIndex: 1450,
-      maxHeight: '60vh',
+      display: 'inline-block',   // ➜ se ajusta al contenido
+      minWidth,
+      maxWidth,
+      maxHeight,
       overflowY: 'auto',
+      zIndex: 1450,
     };
   }, [anchorEl]);
 
@@ -141,11 +147,10 @@ export default function GridSorts({
 
   const handleClear = () => { setRows([]); onApply([]); onClose(); };
 
-  // DnD handlers (usamos solo el "handle" a la izquierda para arrastrar)
+  // DnD handlers
   function onDragStart(e: React.DragEvent, idx: number) {
     setDragIdx(idx);
     e.dataTransfer.effectAllowed = 'move';
-    // Firefox necesita data
     e.dataTransfer.setData('text/plain', String(idx));
   }
   function onDragOver(e: React.DragEvent, idx: number) {
@@ -172,7 +177,7 @@ export default function GridSorts({
       <div className="p-2">
         <div className="mb-2 flex items-center gap-2">
           <span className="muted">Ordenar por</span>
-          <button className="btn ml-auto" onClick={addRow}>+ Añadir otra clasificación</button>
+          <button className="btn ml-auto" onClick={addRow}>+ Regla</button>
         </div>
 
         {rows.length === 0 ? (
@@ -199,7 +204,7 @@ export default function GridSorts({
                     isDragging ? 'opacity-60' : 'opacity-100'
                   ].join(' ')}
                 >
-                  {/* Handle de arrastre */}
+                  {/* Handle */}
                   <button
                     className="icon-btn cursor-move"
                     aria-label="Reordenar"
@@ -245,9 +250,9 @@ export default function GridSorts({
           </div>
         )}
 
-        <div className="mt-3 flex justify-end gap-2">
-          <button className="btn" onClick={handleClear}>Limpiar</button>
-          <button className="btn btn-primary" onClick={handleApply}>Aplicar</button>
+        <div className="panel-actions">
+          <button className="btn-secondary" onClick={handleClear}>Limpiar</button>
+          <button className="btn-primary" onClick={handleApply}>Aplicar</button>
         </div>
       </div>
     </div>

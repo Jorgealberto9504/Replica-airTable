@@ -1,5 +1,5 @@
 // apps/frontend/src/pages/components/AdminRegisterModal.tsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Modal from '../../components/Modal';
 import { adminRegisterUser } from '../../api/auth';
 
@@ -22,7 +22,7 @@ function looksStrong(pwd: string) {
   );
 }
 
-// Solo para hint visual en el formulario (validación real es del backend)
+// Hint visual (la validación real la hace el backend)
 const ALLOWED_HINT = ['mbqinc.com', 'mbqgroup.solutions', 'mbqsolutions.com'];
 
 export default function AdminRegisterModal({ open, onClose, onCreated }: Props) {
@@ -35,6 +35,20 @@ export default function AdminRegisterModal({ open, onClose, onCreated }: Props) 
   const [err, setErr] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Limpiar estado al cerrar
+  useEffect(() => {
+    if (!open) {
+      setEmail('');
+      setFullName('');
+      setTempPassword('');
+      setPlatformRole('USER');
+      setCanCreateBases(false);
+      setErr(null);
+      setOkMsg(null);
+      setLoading(false);
+    }
+  }, [open]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -65,7 +79,7 @@ export default function AdminRegisterModal({ open, onClose, onCreated }: Props) 
       });
 
       if (resp.ok) {
-        setOkMsg('Usuario registrado correctamente');
+        setOkMsg('✅ Usuario registrado correctamente');
         setEmail('');
         setFullName('');
         setTempPassword('');
@@ -73,80 +87,131 @@ export default function AdminRegisterModal({ open, onClose, onCreated }: Props) 
         setCanCreateBases(false);
         onCreated?.();
       } else {
-        setErr('No se pudo registrar');
+        setErr('❌ No se pudo registrar el usuario');
       }
     } catch (e: any) {
-      setErr(e?.message ?? 'Error al registrar');
+      setErr(e?.message ?? 'Error inesperado al registrar');
     } finally {
       setLoading(false);
     }
   }
 
+  const inputCls =
+    'w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-azulMedio focus:border-azulMedio focus:outline-none transition-colors';
+
   return (
-    <Modal open={open} onClose={onClose} title="Registro de usuario">
-      <form onSubmit={handleSubmit} className="form">
-        {err && <div className="alert-error">{err}</div>}
-        {okMsg && <div className="alert-info">{okMsg}</div>}
-
-        <label className="label">Nombre completo</label>
-        <input
-          className="input"
-          value={fullName}
-          onChange={e => setFullName(e.target.value)}
-          placeholder="Nombre Apellido"
-          required
-        />
-
-        <label className="label">Email</label>
-        <input
-          className="input"
-          type="email"
-          value={email}
-          onChange={e => setEmail(e.target.value)}
-          placeholder={`nombre@${ALLOWED_HINT[0]}`}
-          required
-        />
-        <div className="muted text-sm mt-1">
-          Dominios permitidos: {ALLOWED_HINT.join(', ')}
-        </div>
-
-        <label className="label">Contraseña temporal</label>
-        <input
-          className="input"
-          type="password"
-          value={tempPassword}
-          onChange={e => setTempPassword(e.target.value)}
-          placeholder="Aa12345!"
-          required
-        />
-
-        <label className="label">Rol global</label>
-        <select
-          className="input"
-          value={platformRole}
-          onChange={e => setPlatformRole(e.target.value as 'USER' | 'SYSADMIN')}
-        >
-          <option value="USER">USER</option>
-          <option value="SYSADMIN">SYSADMIN</option>
-        </select>
-
-        <label className="label inline-flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={canCreateBases}
-            onChange={e => setCanCreateBases(e.target.checked)}
-          />
-          Creador de bases (permiso global)
-        </label>
-
-        <div className="mt-2 flex gap-2 justify-end">
-          <button type="button" className="btn" onClick={onClose}>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Registro de usuario"
+      // Footer fuera del <form>, lo disparamos con form="admin-register-form"
+      footer={
+        <>
+          <button
+            type="button"
+            className="px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors"
+            onClick={onClose}
+            disabled={loading}
+          >
             Cancelar
           </button>
-          <button className="btn-primary" disabled={loading}>
+          <button
+            type="submit"
+            form="admin-register-form"
+            className="px-4 py-2 rounded-lg bg-azulMedio text-white font-medium hover:brightness-95 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={loading}
+          >
             {loading ? 'Guardando…' : 'Registrar'}
           </button>
+        </>
+      }
+    >
+      <form id="admin-register-form" onSubmit={handleSubmit} className="space-y-4">
+        {err && (
+          <div className="text-red-700 bg-red-50 border border-red-200 rounded-lg p-2 text-sm">
+            {err}
+          </div>
+        )}
+        {okMsg && (
+          <div className="text-green-700 bg-green-50 border border-green-200 rounded-lg p-2 text-sm">
+            {okMsg}
+          </div>
+        )}
+
+        <div className="flex flex-col">
+          <label htmlFor="fullName" className="text-sm font-medium text-gray-700 mb-1">
+            Nombre completo
+          </label>
+          <input
+            id="fullName"
+            className={inputCls}
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+            placeholder="Nombre Apellido"
+            required
+          />
         </div>
+
+        <div className="flex flex-col">
+          <label htmlFor="email" className="text-sm font-medium text-gray-700 mb-1">
+            Email
+          </label>
+          <input
+            id="email"
+            className={inputCls}
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder={`nombre@${ALLOWED_HINT[0]}`}
+            required
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            Dominios permitidos: {ALLOWED_HINT.join(', ')}
+          </p>
+        </div>
+
+        <div className="flex flex-col">
+          <label htmlFor="password" className="text-sm font-medium text-gray-700 mb-1">
+            Contraseña temporal
+          </label>
+          <input
+            id="password"
+            className={inputCls}
+            type="password"
+            value={tempPassword}
+            onChange={(e) => setTempPassword(e.target.value)}
+            placeholder="Aa12345!"
+            required
+          />
+          <p className="text-xs text-slate-500 mt-1">
+            Debe tener al menos 8 caracteres, incluir mayúscula, minúscula, número y símbolo.
+          </p>
+        </div>
+
+        <div className="flex flex-col">
+          <label htmlFor="role" className="text-sm font-medium text-gray-700 mb-1">
+            Rol global
+          </label>
+          <select
+            id="role"
+            className={inputCls}
+            value={platformRole}
+            onChange={(e) => setPlatformRole(e.target.value as 'USER' | 'SYSADMIN')}
+          >
+            <option value="USER">USER</option>
+            <option value="SYSADMIN">SYSADMIN</option>
+          </select>
+        </div>
+
+        <label htmlFor="canCreate" className="inline-flex items-center gap-2 text-sm">
+          <input
+            id="canCreate"
+            type="checkbox"
+            checked={canCreateBases}
+            onChange={(e) => setCanCreateBases(e.target.checked)}
+          />
+          Puede crear bases (permiso global)
+        </label>
       </form>
     </Modal>
   );

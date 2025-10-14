@@ -1,6 +1,6 @@
 // apps/frontend/src/pages/components/CreateBaseModal.tsx
-// Modal para crear Base dentro de un Workspace (sin estilos inline fijos)
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import Modal from '../../components/Modal';
 import { createBaseInWorkspace } from '../../api/workspaces';
 
 type Props = {
@@ -14,70 +14,115 @@ export default function CreateBaseModal({ open, workspaceId, onClose, onCreated 
   const [name, setName] = useState('');
   const [visibility, setVisibility] = useState<'PUBLIC' | 'PRIVATE'>('PRIVATE');
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  if (!open) return null;
+  // Reset limpio al cerrar
+  useEffect(() => {
+    if (!open) {
+      setName('');
+      setVisibility('PRIVATE');
+      setError(null);
+      setSubmitting(false);
+    }
+  }, [open]);
+
+  const inputCls =
+    'w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-azulMedio focus:border-azulMedio focus:outline-none transition-colors';
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!workspaceId || !name.trim()) return;
+    if (!workspaceId || !name.trim()) {
+      setError('El nombre es obligatorio.');
+      return;
+    }
+
+    setError(null);
     setSubmitting(true);
     try {
-      await createBaseInWorkspace(workspaceId, { name: name.trim(), visibility });
+      await createBaseInWorkspace(workspaceId, {
+        name: name.trim(),
+        visibility,
+      });
       onCreated?.();
       onClose();
       setName('');
       setVisibility('PRIVATE');
     } catch (err: any) {
-      alert(err.message || 'No se pudo crear la base');
+      setError(err?.message || 'No se pudo crear la base');
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h3 className="m-0 font-bold">Nueva base</h3>
-          <button className="modal-close" onClick={onClose}>✕</button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="modal-body">
-          <label className="field">
-            <span className="label">Nombre</span>
-            <input
-              className="input"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="CRM, Inventario, Proyectos…"
-            />
-          </label>
-
-          <label className="field">
-            <span className="label">Visibilidad</span>
-            <select
-              className="select"
-              value={visibility}
-              onChange={(e) => setVisibility(e.target.value as 'PUBLIC' | 'PRIVATE')}
-            >
-              <option value="PRIVATE">PRIVATE</option>
-              <option value="PUBLIC">PUBLIC</option>
-            </select>
-          </label>
-        </form>
-
-        <div className="modal-footer">
-          <button type="button" onClick={onClose} className="btn">Cancelar</button>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Nueva base"
+      footer={
+        <>
           <button
             type="button"
-            onClick={handleSubmit as any}
+            className="px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            form="create-base-form"
+            className="px-4 py-2 rounded-lg bg-azulMedio text-white font-medium hover:brightness-95 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             disabled={submitting || !name.trim() || !workspaceId}
-            className="btn-primary"
           >
             {submitting ? 'Creando…' : 'Crear'}
           </button>
+        </>
+      }
+    >
+      <form id="create-base-form" onSubmit={handleSubmit} className="space-y-4">
+        {error && (
+          <div className="text-red-700 bg-red-50 border border-red-200 rounded-lg p-2 text-sm">
+            {error}
+          </div>
+        )}
+
+        {/* Nombre */}
+        <div className="flex flex-col">
+          <label htmlFor="baseName" className="text-sm font-medium text-gray-700 mb-1">
+            Nombre
+          </label>
+          <input
+            id="baseName"
+            className={inputCls}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="CRM, Inventario, Proyectos…"
+            autoFocus
+          />
         </div>
-      </div>
-    </div>
+
+        {/* Visibilidad */}
+        <div className="flex flex-col">
+          <label htmlFor="baseVisibility" className="text-sm font-medium text-gray-700 mb-1">
+            Visibilidad
+          </label>
+          <select
+            id="baseVisibility"
+            className={inputCls}
+            value={visibility}
+            onChange={(e) => setVisibility(e.target.value as 'PUBLIC' | 'PRIVATE')}
+          >
+            <option value="PRIVATE">PRIVATE</option>
+            <option value="PUBLIC">PUBLIC</option>
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            {visibility === 'PUBLIC'
+              ? 'Todos los usuarios pueden ver esta base.'
+              : 'Solo tú y usuarios autorizados podrán verla.'}
+          </p>
+        </div>
+      </form>
+    </Modal>
   );
 }

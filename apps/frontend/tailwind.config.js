@@ -1,16 +1,19 @@
-// apps/frontend/tailwind.config.js
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
-    './index.html',
-    './src/**/*.{ts,tsx,js,jsx}',
+    "./.index.css",
+    "./src/**/*.{js,jsx,ts,tsx}" // 👈 esto incluye subcarpetas
   ],
   theme: {
     extend: {
-      boxShadow: {
-        card: '0 8px 24px rgba(0,0,0,0.05)',
+      colors: {
+        fondo: "#F0F3FA",
+        verde: "#8AAEE0",
+        azulMedio: "#638ECB",
+        azulOscuro: "#395886",
       },
     },
   },
   plugins: [],
-};
+}
+

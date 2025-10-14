@@ -876,3 +876,57 @@ function multiSelectCond(fieldId: number, op: string, raw?: any): Prisma.RecordR
   }
   return { id: { not: undefined } };
 }
+
+// === BOOTSTRAP (fields + options + records + commentCounts en una sola llamada) ===
+export type BootstrapParams = {
+  page?: number;
+  pageSize?: number;
+  logic?: 'AND' | 'OR';
+  filters?: any[];         // mismo formato que queryRecords
+  sort?: SortSpec[];
+};
+
+export async function bootstrapGridSvc(
+  baseId: number,
+  tableId: number,
+  { page = 1, pageSize = 50, logic = 'AND', filters = [], sort = [] }: BootstrapParams
+) {
+  // 1) Fields + options embebidos (mínimos)
+  const fields = await prisma.field.findMany({
+    where: { tableId, isTrashed: false },
+    orderBy: { position: 'asc' },
+    select: {
+      id: true, name: true, type: true, position: true,
+      options: {
+        where: { isTrashed: false },
+        orderBy: { position: 'asc' },
+        select: { id: true, label: true, color: true, position: true },
+      },
+    },
+  });
+
+  // 2) Records (reusa tu motor de filtros + sort)
+  const group = { kind: 'group', logic, filters } as any;
+  const { total, records } = await queryRecordsSvc(
+    baseId,
+    tableId,
+    group,
+    page,
+    pageSize,
+    sort
+  );
+
+  // 3) Conteo de comentarios solo para los records que vienen en página
+  const ids = records.map(r => r.id);
+  let commentCounts: Record<number, number> = {};
+  if (ids.length) {
+    const counts = await prisma.comment.groupBy({
+      by: ['recordId'],
+      where: { recordId: { in: ids }, isTrashed: false },
+      _count: { recordId: true },
+    });
+    for (const c of counts) commentCounts[c.recordId] = c._count.recordId;
+  }
+
+  return { fields, total, records, commentCounts };
+}

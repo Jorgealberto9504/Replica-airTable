@@ -1,17 +1,14 @@
-// apps/frontend/src/pages/Dashboard.tsx
 import { Navigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 
 import Header from '../components/Header';
 import AdminRegisterModal from './components/AdminRegisterModal';
-
-import { useAuth } from '../auth/AuthContext';
-
 import WorkspaceSidebar from './components/WorkspaceSidebar';
 import BaseGrid from './components/BaseGrid';
 import CreateWorkspaceModal from './components/CreateWorkspaceModal';
 import CreateBaseModal from './components/CreateBaseModal';
 
+import { useAuth } from '../auth/AuthContext';
 import { listMyWorkspaces, listBasesForWorkspace } from '../api/workspaces';
 
 export default function Dashboard() {
@@ -28,7 +25,7 @@ export default function Dashboard() {
   if (loading) {
     return (
       <div className="page-center">
-        <div className="card">
+        <div className="card p-6">
           <h2 className="section-title mb-2">Verificando sesión…</h2>
           <p className="muted">Un momento por favor.</p>
         </div>
@@ -38,13 +35,13 @@ export default function Dashboard() {
 
   if (!me) return <Navigate to="/login" replace />;
 
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     try {
       await logout();
     } finally {
       window.location.href = '/login';
     }
-  };
+  }, [logout]);
 
   useEffect(() => {
     (async () => {
@@ -59,15 +56,16 @@ export default function Dashboard() {
 
   const canCreate = me.platformRole === 'SYSADMIN' || !!(me as any).canCreateBases;
 
-  async function refreshAfterCreate() {
+  const refreshAfterCreate = useCallback(async () => {
     if (selectedWs) {
       await listBasesForWorkspace(selectedWs).catch(() => {});
     }
     setReloadKey((k) => k + 1);
-  }
+  }, [selectedWs]);
 
   return (
-    <>
+    <div className="bg-gray-50 min-h-screen">
+      {/* Header sticky global */}
       <Header
         user={me}
         onLogout={handleLogout}
@@ -79,10 +77,14 @@ export default function Dashboard() {
         }}
       />
 
-      {/* Shell principal */}
-      <div className="main-wrap">
-        {/* Sidebar */}
-        <aside className="ws-sidebar">
+      {/* Shell con sidebar fija bajo el header */}
+      <div className="workspace-shell">
+        {/* Sidebar Workspaces */}
+        <aside className="workspace-sidebar bg-white border-r border-gray-200 shadow-sm">
+          <div className="p-5 border-b border-gray-100">
+            <h1 className="text-xl font-bold text-gray-800">Workspaces</h1>
+          </div>
+          <div className="h-2" />
           <WorkspaceSidebar
             selectedId={selectedWs}
             onSelect={setSelectedWs}
@@ -92,32 +94,38 @@ export default function Dashboard() {
         </aside>
 
         {/* Contenido */}
-        <main className="flex-1">
-          <BaseGrid
-            workspaceId={selectedWs}
-            onCreateBase={() => setOpenCreateBase(true)}
-            canCreate={canCreate}
-            query={qBases}
-            showInlineSearch={false}
-            reloadKey={reloadKey}
-          />
+        <main className="workspace-content">
+          <div className="content py-6">
+            <div className="bg-white rounded-card border border-gray-200 shadow-sm overflow-hidden">
+              <BaseGrid
+                workspaceId={selectedWs}
+                onCreateBase={() => setOpenCreateBase(true)}
+                canCreate={canCreate}
+                query={qBases}
+                showInlineSearch={false}
+                reloadKey={reloadKey}
+              />
+            </div>
+          </div>
         </main>
       </div>
 
-      <AdminRegisterModal open={openRegister} onClose={() => setOpenRegister(false)} />
-
+      {/* Modales */}
+      <AdminRegisterModal
+        open={openRegister}
+        onClose={() => setOpenRegister(false)}
+      />
       <CreateWorkspaceModal
         open={openCreateWs}
         onClose={() => setOpenCreateWs(false)}
         onCreated={refreshAfterCreate}
       />
-
       <CreateBaseModal
         open={openCreateBase}
         onClose={() => setOpenCreateBase(false)}
         workspaceId={selectedWs}
         onCreated={refreshAfterCreate}
       />
-    </>
+    </div>
   );
 }

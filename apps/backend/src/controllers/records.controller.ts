@@ -1,4 +1,3 @@
-// apps/backend/src/controllers/records.controller.ts
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import {
@@ -6,8 +5,10 @@ import {
   createRecordSvc,
   patchRecordSvc,
   deleteRecordSvc,
-  // NEW
+  // filtros/orden
   queryRecordsSvc,
+  // NUEVO bootstrap
+  bootstrapGridSvc,
   // trash
   listTrashedRecordsForTableSvc,
   restoreRecordSvc,
@@ -35,19 +36,15 @@ const patchRecordSchema = z.object({
   values: valuesSchema,
 });
 
-/* ========= Filtros (tipo Airtable) =========
-   Árbol recursivo:
-   - Condición: { kind:'cond', fieldId:number, op:string, value?:any, values?:any[] }
-   - Grupo:     { kind:'group', logic:'AND'|'OR', filters: FilterNode[] }
-*/
+/* ========= Filtros (tipo Airtable) ========= */
 type LogicOp = 'AND' | 'OR';
 
 const filterCondSchema = z.object({
   kind: z.literal('cond'),
   fieldId: z.coerce.number().int().min(1),
-  op: z.string().min(1),            // validaremos por tipo en el servicio
-  value: z.any().optional(),        // para eq, contains, gt, on, etc.
-  values: z.array(z.any()).optional(), // para between/multi-select (arrays)
+  op: z.string().min(1),
+  value: z.any().optional(),
+  values: z.array(z.any()).optional(),
 });
 type FilterCond = z.infer<typeof filterCondSchema>;
 
@@ -74,14 +71,13 @@ const sortItemSchema = z.object({
   kind: z.literal('field'),
   fieldId: z.coerce.number().int().min(1),
   dir: z.enum(['asc', 'desc']),
-  nulls: z.enum(['first', 'last']).optional(), // default "last"
+  nulls: z.enum(['first', 'last']).optional(),
 });
 
 const queryBodySchema = z.object({
-  all: z.coerce.boolean().optional().default(true),          // si true, ignora paginación
+  all: z.coerce.boolean().optional().default(true),
   page: z.coerce.number().int().min(1).optional(),
   pageSize: z.coerce.number().int().min(1).max(500).optional(),
-  // top-level puede venir como lista + lógica (igual que Airtable)
   logic: z.enum(['AND', 'OR']).optional().default('AND'),
   filters: z.array(filterNodeSchema).optional().default([]),
   sort: z.array(sortItemSchema).optional().default([]),
@@ -145,7 +141,7 @@ export async function deleteRecord(req: Request, res: Response, next: NextFuncti
   } catch (e) { next(e); }
 }
 
-/* ========== QUERY (filtros + ordenamiento en TODA la tabla) ========== */
+/* ========== QUERY (filtros + orden) ========== */
 export async function queryRecords(req: Request, res: Response, next: NextFunction) {
   try {
     const baseId = Number(req.params.baseId);
@@ -167,6 +163,25 @@ export async function queryRecords(req: Request, res: Response, next: NextFuncti
       body.sort
     );
     res.json({ ok: true, total, records });
+  } catch (e) { next(e); }
+}
+
+/* ========== BOOTSTRAP (1 request: fields+options+records+counts) ========== */
+export async function bootstrapGrid(req: Request, res: Response, next: NextFunction) {
+  try {
+    const baseId = Number(req.params.baseId);
+    const tableId = Number(req.params.tableId);
+    const body = queryBodySchema.parse(req.body);
+
+    const out = await bootstrapGridSvc(baseId, tableId, {
+      page: body.all ? 1 : (body.page ?? 1),
+      pageSize: body.all ? 1_000_000 : (body.pageSize ?? 50),
+      logic: body.logic,
+      filters: body.filters,
+      sort: body.sort,
+    });
+
+    res.json({ ok: true, ...out });
   } catch (e) { next(e); }
 }
 

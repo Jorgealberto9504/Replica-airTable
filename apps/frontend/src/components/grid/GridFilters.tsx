@@ -1,4 +1,3 @@
-// apps/frontend/src/components/grid/GridFilters.tsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import type React from 'react';
@@ -48,6 +47,9 @@ function move<T>(arr: T[], from: number, to: number) {
   return copy;
 }
 
+const MIN_W = 320;
+const MAX_W = 720;
+
 export default function GridFilters({
   anchorEl,
   open,
@@ -94,20 +96,26 @@ export default function GridFilters({
     };
   }, [open, anchorEl, onClose, scrollContainerRef]);
 
-  // Posición (viewport) + límites
+  // Posición (viewport) + límites (ancho fluido)
   const style = useMemo<React.CSSProperties>(() => {
     if (!anchorEl) return { display: 'none' };
     const r = anchorEl.getBoundingClientRect();
-    const width = 650;
     const margin = 6;
-    const left = Math.min(Math.max(8, r.left), window.innerWidth - width - 8);
+
+    const maxWidth = Math.min(window.innerWidth - 16, MAX_W);
+    const minWidth = Math.min(maxWidth, MIN_W);
+    const left = Math.min(Math.max(8, r.left), window.innerWidth - maxWidth - 8);
     const top = Math.min(r.bottom + margin, window.innerHeight - 8);
+    const maxHeight = Math.min(window.innerHeight - top - 8, Math.round(window.innerHeight * 0.7));
+
     return {
       position: 'fixed',
       top,
       left,
-      width,
-      maxHeight: '60vh',
+      display: 'inline-block', // ➜ se ajusta al contenido
+      minWidth,
+      maxWidth,
+      maxHeight,
       overflowY: 'auto',
       zIndex: 1450,
     };
@@ -497,9 +505,9 @@ export default function GridFilters({
           </div>
         )}
 
-        <div className="mt-3 flex justify-end gap-2">
-          <button className="btn" onClick={handleClear}>Limpiar</button>
-          <button className="btn btn-primary" onClick={handleApply}>Aplicar</button>
+        <div className="panel-actions">
+          <button className="btn-secondary" onClick={handleClear}>Limpiar</button>
+          <button className="btn-primary" onClick={handleApply}>Aplicar</button>
         </div>
       </div>
     </div>

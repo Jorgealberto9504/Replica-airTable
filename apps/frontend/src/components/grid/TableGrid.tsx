@@ -6,10 +6,10 @@ import {
   listFields, createField, updateField, deleteField, listOptions,
   type Field, type FieldType,
 } from '../../api/fields';
-import { queryRecords, createRecord, patchRecord, deleteRecord, type SortSpec } from '../../api/records';
+import { createRecord, patchRecord, deleteRecord, type SortSpec } from '../../api/records';
+import { bootstrapGrid } from '../../api/grid';
 
 import CommentsPanel from '../comments/Comments.Panel';
-import { countCommentsForRecords } from '../../api/comments';
 
 import Modal from './Modal';
 import FieldDefForm from './FieldDefForm';
@@ -17,7 +17,8 @@ import OptionEditor from './OptionEditor';
 
 import { CellEditor, ReadonlyCell, toDataTypeAttr, printCellTitle } from './CellEditors';
 
-import GridToolbar from './GridToolbar';
+// Eliminamos GridToolbar porque integramos su UI al header
+// import GridToolbar from './GridToolbar';
 import ColumnMenu from './ColumnMenu';
 import RowMenu from './RowMenu';
 
@@ -72,13 +73,6 @@ const MAX_COL_W = 800;
 /* Ancho por defecto para “Última actividad” */
 const DEFAULT_LAST_W = 260;
 
-/** Grid: ID + columnas dinámicas + Última actividad + “Agregar columna” */
-function makeGridTemplate(widths: number[], lastW: number) {
-  const mids = widths.map(w => `${w}px`).join(' ');
-  return `var(--grid-id-w) ${mids} ${lastW}px var(--grid-addcol-w)`;
-}
-
-/* ===== helpers de formateo ===== */
 function timeAgoFromISO(iso?: string | null) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -93,7 +87,6 @@ function timeAgoFromISO(iso?: string | null) {
   if (dys < 30) return `hace ${dys} d`;
   return d.toLocaleString();
 }
-
 function lastChangeInline(lc?: LastChange) {
   if (!lc) return '—';
   const who = lc.user?.fullName ? ` · ${lc.user.fullName}` : '';
@@ -106,7 +99,6 @@ function lastChangeInline(lc?: LastChange) {
   const field = lc.fieldName ?? 'Celda';
   return `${field}${who}${when}`;
 }
-
 function lastChangeTitle(lc?: LastChange) {
   if (!lc) return 'Sin actividad';
   const base =
@@ -115,6 +107,22 @@ function lastChangeTitle(lc?: LastChange) {
       : `Edición en ${lc.fieldName ?? 'celda'}`;
   const at = new Date(lc.at);
   return `${base} · ${at.toLocaleString()}`;
+}
+
+function typeBadgeClasses(t: FieldType) {
+  switch (t) {
+    case 'TEXT':
+    case 'LONG_TEXT': return 'bg-gray-100 text-gray-700';
+    case 'NUMBER':
+    case 'CURRENCY': return 'bg-green-100 text-green-700';
+    case 'CHECKBOX': return 'bg-purple-100 text-purple-700';
+    case 'DATE':
+    case 'DATETIME':
+    case 'TIME': return 'bg-yellow-100 text-yellow-700';
+    case 'SINGLE_SELECT': return 'bg-blue-100 text-blue-700';
+    case 'MULTI_SELECT': return 'bg-indigo-100 text-indigo-700';
+    default: return 'bg-gray-100 text-gray-700';
+  }
 }
 
 export default function TableGrid({ baseId, tableId, perms, canManageFields }: Props) {
@@ -245,7 +253,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   }
   function startResizeLast(e: React.MouseEvent) {
     e.preventDefault();
-    // usaremos el mismo permiso que el resto de columnas (si quieres permitirlo a todos, quita este if)
     if (!canManageFields) return;
     const th = (e.currentTarget as HTMLElement).parentElement as HTMLElement;
     const startW = th.getBoundingClientRect().width;
@@ -268,7 +275,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   }
   function fieldById(id: number) { return fields.find((f) => f.id === id)!; }
 
-  // ===== Carga
+  // ===== Carga inicial: 1 sola petición (bootstrapGrid)
   useEffect(() => {
     let alive = true;
     const ac = new AbortController();
@@ -277,28 +284,29 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       setLoading(true);
       setError(null);
       try {
-        const [f, r] = await Promise.all([
-          listFields(baseId, tableId),
-          queryRecords(baseId, tableId, ({
+        const b = await bootstrapGrid(
+          baseId,
+          tableId,
+          {
             page, pageSize,
             logic: filters.logic,
             filters: filters.filters,
             sort,
-            signal: ac.signal,
-          } as any)),
-        ]);
-        if (!alive) return;
-        const withOptions = await ensureSelectOptions(baseId, tableId, f.fields);
+          },
+          ac.signal
+        );
         if (!alive) return;
 
-        setFields(withOptions);
-        setRecords(r.records as UIRecord[]);
-        setTotal(r.total);
+        // Ya vienen options embebidas
+        setFields(b.fields as unknown as Field[]);
+        setRecords(b.records as UIRecord[]);
+        setTotal(b.total);
+        setCommentCounts(b.commentCounts ?? {});
 
         // Inicializa anchos para nuevas columnas
         setColWidths((prev) => {
           const next = { ...prev };
-          withOptions.forEach(ff => { if (next[ff.id] == null) next[ff.id] = DEFAULT_COL_W; });
+          (b.fields || []).forEach((ff: any) => { if (next[ff.id] == null) next[ff.id] = DEFAULT_COL_W; });
           return next;
         });
       } catch (e: any) {
@@ -316,22 +324,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     };
   }, [baseId, tableId, page, pageSize, filters, sort]);
 
-  // ===== Conteos de comentarios
-  useEffect(() => {
-    if (!records.length) { setCommentCounts({}); return; }
-    let alive = true;
-    (async () => {
-      try {
-        const ids = records.map(r => r.id);
-        const map = await countCommentsForRecords(baseId, tableId, ids);
-        if (alive) setCommentCounts(map);
-      } catch { /* ignore */ }
-    })();
-    return () => { alive = false; };
-  }, [baseId, tableId, records]);
-
   // ===== CRUD / estados optimistas
-
   function setLastChange(recordId: number, lc: LastChange) {
     setRecords(prev => prev.map(r => (r.id === recordId ? { ...r, lastChange: lc } : r)));
   }
@@ -362,10 +355,9 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
 
     try {
       await patchRecord(baseId, tableId, recordId, { [String(fieldId)]: next });
-      // si quisieras revalidar desde backend, aquí podrías hacer un fetch de la fila
     } catch (e: any) {
       alert(e?.message || 'No se pudo guardar');
-      setPage(p => p); // fuerza re-render para revalidar en la siguiente carga
+      setPage(p => p); // fuerza re-render en la siguiente carga
     }
   }
 
@@ -393,7 +385,17 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   function openColumnMenu(e: React.MouseEvent, f: Field) {
     if (!canManageFields) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    setColumnMenu({ field: f, x: rect.left, y: rect.bottom + 4 });
+
+    // Mantener el panel SIEMPRE visible dentro del viewport
+    const MENU_W = 240;
+    const margin = 8;
+    const x = Math.min(
+      Math.max(margin, rect.right - MENU_W),             // alinear aprox al borde derecho del botón
+      window.innerWidth - MENU_W - margin
+    );
+    const y = Math.min(rect.bottom + 8, window.innerHeight - margin);
+
+    setColumnMenu({ field: f, x, y });
   }
 
   // ===== Crear / renombrar / tipo / borrar columna
@@ -410,6 +412,8 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       });
       setAddColOpen(false);
       setNewColName(''); setNewColType('TEXT'); setNewSelectOpts(['Opción 1', 'Opción 2']);
+
+      // refrescamos campos (post-mutate)
       const f = await listFields(baseId, tableId);
       const withOptions = await ensureSelectOptions(baseId, tableId, f.fields);
       setFields(withOptions);
@@ -467,9 +471,9 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     return used;
   }, [fields, records]);
 
-  const widths = fields.map(f => colWidths[f.id] ?? DEFAULT_COL_W);
-  const gridTemplate = makeGridTemplate(widths, lastColW);
-  const rowStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: gridTemplate };
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const rangeFrom = total ? (page - 1) * pageSize + 1 : 0;
+  const rangeTo = total ? Math.min(page * pageSize, total) : 0;
 
   function openRowContextMenu(e: React.MouseEvent, recordId: number) {
     e.preventDefault();
@@ -483,7 +487,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       ...prev,
       [recordId]: Math.max(0, (prev[recordId] ?? 0) + delta),
     }));
-    // si se añadió un comentario, reflejar en “Última actividad” sin recargar
     if (delta > 0) {
       setLastChange(recordId, {
         kind: 'COMMENT',
@@ -496,18 +499,120 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   }
 
   return (
-    <div className="grid-card">
-      <GridToolbar
-        total={total}
-        page={page}
-        pageSize={pageSize}
-        onChangePage={setPage}
-        onChangePageSize={(n) => { setPage(1); setPageSize(n); }}
-        onOpenFilters={(anchor) => setFiltersUI({ open: true, anchor })}
-        onOpenSorts={(anchor) => setSortUI({ open: true, anchor })}
-        sortCount={sort.length}
-        filtersCount={filters.filters.length}
-      />
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+      {/* Header estilo Luisa */}
+      <div className="flex items-center justify-between p-6 border-b border-gray-200">
+        <div>
+          <h2 className="text-xl font-semibold text-gray-900">Registros</h2>
+          <p className="text-sm text-gray-500">
+            {total} {total === 1 ? 'fila' : 'filas'} • {fields.length} {fields.length === 1 ? 'columna' : 'columnas'}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* Filtros */}
+          <button
+            onClick={(e) => setFiltersUI({ open: true, anchor: e.currentTarget as unknown as HTMLElement })}
+            className="px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm font-medium flex items-center gap-2"
+            title="Filtros"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L15 12.414V19a1 1 0 01-1.447.894l-4-2A1 1 0 019 17v-4.586L3.293 6.707A1 1 0 013 6V4z" />
+            </svg>
+            Filtros
+            {filters.filters.length > 0 && (
+              <span className="ml-1 inline-flex items-center justify-center text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                {filters.filters.length}
+              </span>
+            )}
+          </button>
+
+          {/* Orden */}
+          <button
+            onClick={(e) => setSortUI({ open: true, anchor: e.currentTarget as unknown as HTMLElement })}
+            className="px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-sm font-medium flex items-center gap-2"
+            title="Ordenar"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h11M3 6h7M3 14h15M3 18h15" />
+            </svg>
+            Orden
+            {sort.length > 0 && (
+              <span className="ml-1 inline-flex items-center justify-center text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                {sort.length}
+              </span>
+            )}
+          </button>
+
+          <span className="w-px h-6 bg-gray-200 mx-1" />
+
+          {canManageFields && (
+            <button
+              onClick={() => {
+                setAddColOpen(true);
+                setNewColType('TEXT');
+                setNewColName('');
+                setNewSelectOpts(['Opción 1', 'Opción 2']);
+              }}
+              className="px-3 py-2 bg-gray-700 hover:bg-gray-800 text-white rounded-lg text-sm font-medium"
+            >
+              Nueva columna
+            </button>
+          )}
+
+          {effectivePerms.canCreate && (
+            <button
+              onClick={handleAddRow}
+              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Agregar fila
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Mini barra de paginación */}
+      <div className="flex items-center justify-between px-6 py-3 border-b bg-gray-50 text-sm text-gray-700">
+        <div>
+          {total > 0 ? (
+            <span>Mostrando {rangeFrom}–{rangeTo} de {total}</span>
+          ) : (
+            <span>Sin resultados</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            value={pageSize}
+            onChange={(e) => { setPage(1); setPageSize(Number(e.target.value)); }}
+            className="px-2 py-1 border border-gray-300 rounded-md bg-white"
+            title="Tamaño de página"
+          >
+            {[10, 25, 50, 100].map(n => <option key={n} value={n}>{n}/pág</option>)}
+          </select>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="px-2 py-1 border border-gray-300 rounded disabled:opacity-50 bg-white hover:bg-gray-50"
+              title="Anterior"
+            >
+              ‹
+            </button>
+            <span className="px-2">Página {page} de {totalPages}</span>
+            <button
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="px-2 py-1 border border-gray-300 rounded disabled:opacity-50 bg-white hover:bg-gray-50"
+              title="Siguiente"
+            >
+              ›
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* Panel Filtros */}
       <GridFilters
@@ -531,131 +636,187 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
         onClose={() => setSortUI({ open: false, anchor: null })}
       />
 
-      <div className="grid-wrap" ref={containerRef}>
-        {/* Header */}
-        <div className="grid-row grid-header" style={rowStyle}>
-          <div className="grid-th id-col">#</div>
+      {/* Tabla */}
+      <div className="overflow-x-auto" ref={containerRef}>
+        <table className="w-full table-fixed">
+          <thead className="bg-gray-50 border-b border-gray-200">
+            <tr>
+              {/* Columna # */}
+              <th className="w-16 px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-200">
+                #
+              </th>
 
-          {fields.map((f) => (
-            <div
-              key={f.id}
-              className="grid-th"
-              title={`${f.name} (${f.type})`}
-              onMouseEnter={() => setHoverCol(f.id)}
-              onMouseLeave={() => setHoverCol((c) => (c === f.id ? null : c))}
-            >
-              {canManageFields && (
-                <button
-                  className="th-menu-btn"
-                  style={{ opacity: hoverCol === f.id ? 1 : 0 }}
-                  onClick={(e) => openColumnMenu(e, f)}
-                  aria-label="Abrir menú de columna"
-                >▾</button>
-              )}
-
-              <div className="th-inner">
-                <span className="th-title">{f.name}</span>
-              </div>
-
-              {canManageFields && (
-                <span className="col-resizer" onMouseDown={(e) => startResizeField(f.id, e)} />
-              )}
-            </div>
-          ))}
-
-          {/* ===== Columna “Última actividad” (redimensionable) ===== */}
-          <div className="grid-th lastchange-col" title="Última actividad">
-            <div className="th-inner">
-              <span className="th-title">Última actividad</span>
-            </div>
-            {canManageFields && (
-              <span className="col-resizer" onMouseDown={startResizeLast} />
-            )}
-          </div>
-
-          <div className="grid-th add-col">
-            {canManageFields && (
-              <button
-                className="add-col-btn"
-                title="Agregar columna"
-                onClick={() => {
-                  setAddColOpen(true);
-                  setNewColType('TEXT');
-                  setNewColName('');
-                  setNewSelectOpts(['Opción 1', 'Opción 2']);
-                }}
-              >+</button>
-            )}
-          </div>
-        </div>
-
-        {/* Rows */}
-        {loading ? (
-          <div className="grid-empty">Cargando…</div>
-        ) : records.length === 0 ? (
-          <div className="grid-empty">No hay registros.</div>
-        ) : (
-          records.map((r, idx) => {
-            const rowNumber = (page - 1) * pageSize + idx + 1;
-            return (
-              <div
-                key={r.id}
-                className="grid-row"
-                style={rowStyle}
-                onContextMenu={(e) => openRowContextMenu(e, r.id)}
-              >
-                <div className="grid-td id-col">
-                  <span>{rowNumber}</span>
-
-                  {(commentCounts[r.id] ?? 0) > 0 && (
+              {/* Columnas dinámicas */}
+              {fields.map((f) => (
+                <th
+                  key={f.id}
+                  className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider border-r border-gray-200 relative group pr-10"
+                  title={`${f.name} (${f.type})`}
+                  style={{ width: (colWidths[f.id] ?? DEFAULT_COL_W), minWidth: (colWidths[f.id] ?? DEFAULT_COL_W) }}
+                  onMouseEnter={() => setHoverCol(f.id)}
+                  onMouseLeave={() => setHoverCol((c) => (c === f.id ? null : c))}
+                >
+                  {/* Botón del menú de columna (centrado y separado del resizer) */}
+                  {canManageFields && (
                     <button
-                      className="icon-btn ml-1"
-                      title={`Comentarios (${commentCounts[r.id]})`}
-                      onClick={() => setCmtPanel({ open: true, recordId: r.id })}
+                      className="absolute top-1/2 -translate-y-1/2 right-6 z-[5]
+                                 w-7 h-7 grid place-items-center rounded-md
+                                 bg-white/80 text-gray-500 hover:text-gray-800 hover:bg-white shadow-sm
+                                 opacity-0 group-hover:opacity-100 focus:opacity-100 transition"
+                      onClick={(e) => openColumnMenu(e, f)}
+                      aria-label="Abrir menú de columna"
+                      title="Menú"
                     >
-                      💬
+                      ⋯
                     </button>
                   )}
-                </div>
 
-                {fields.map((f) => (
-                  <div
-                    key={`${r.id}-${f.id}`}
-                    className="grid-td"
-                    data-type={toDataTypeAttr(f.type)}
-                    title={printCellTitle(fieldById(f.id), r.values[String(f.id)])}
-                  >
-                    {effectivePerms.canUpdate ? (
-                      <CellEditor
-                        field={f}
-                        value={r.values[String(f.id)] ?? null}
-                        onCommit={(val) => commitCell(r.id, f.id, val)}
-                      />
-                    ) : (
-                      <ReadonlyCell field={f} value={r.values[String(f.id)] ?? null} />
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-gray-800 truncate">{f.name}</span>
+                    <span className={`ml-2 inline-flex px-2 py-1 rounded text-[10px] font-medium ${typeBadgeClasses(f.type)}`}>
+                      {f.type}
+                    </span>
+                  </div>
+
+                  {/* Grip de resize */}
+                  {canManageFields && (
+                    <span
+                      className="absolute top-0 right-0 h-full w-1 cursor-col-resize"
+                      onMouseDown={(e) => startResizeField(f.id, e)}
+                    />
+                  )}
+                </th>
+              ))}
+
+              {/* Última actividad (redimensionable) */}
+              <th
+                className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider border-r border-gray-200 relative"
+                style={{ width: lastColW, minWidth: lastColW }}
+                title="Última actividad"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-gray-800">Última actividad</span>
+                </div>
+                {canManageFields && (
+                  <span
+                    className="absolute top-0 right-0 h-full w-1 cursor-col-resize"
+                    onMouseDown={startResizeLast}
+                  />
+                )}
+              </th>
+            </tr>
+          </thead>
+
+          <tbody className="divide-y divide-gray-200">
+            {loading ? (
+              <tr>
+                <td colSpan={fields.length + 2} className="px-4 py-6 text-center text-gray-500">
+                  Cargando…
+                </td>
+              </tr>
+            ) : records.length === 0 ? (
+              <tr>
+                <td colSpan={fields.length + 2} className="px-4 py-10 bg-gray-50">
+                  <div className="text-center">
+                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                      <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                    </div>
+                    <p className="text-gray-600">No hay registros.</p>
+                    {effectivePerms.canCreate && (
+                      <button
+                        onClick={handleAddRow}
+                        className="mt-3 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                      >
+                        Agregar primera fila
+                      </button>
                     )}
                   </div>
-                ))}
+                </td>
+              </tr>
+            ) : (
+              records.map((r, idx) => {
+                const rowNumber = (page - 1) * pageSize + idx + 1;
+                return (
+                  <tr
+                    key={r.id}
+                    className="hover:bg-gray-50 transition-colors"
+                    onContextMenu={(e) => openRowContextMenu(e, r.id)}
+                  >
+                    {/* # y comentarios */}
+                    <td className="px-4 py-3 text-sm text-gray-500 font-mono border-r border-gray-200 bg-gray-50">
+                      <div className="flex items-center">
+                        <span>{rowNumber}</span>
+                        {(commentCounts[r.id] ?? 0) > 0 && (
+                          <button
+                            className="ml-2 text-gray-600 hover:text-gray-800"
+                            title={`Comentarios (${commentCounts[r.id]})`}
+                            onClick={() => setCmtPanel({ open: true, recordId: r.id })}
+                          >
+                            💬
+                          </button>
+                        )}
+                      </div>
+                    </td>
 
-                {/* Celda “Última actividad” */}
-                <div
-                  className="grid-td lastchange-col"
-                  title={lastChangeTitle(r.lastChange)}
-                >
-                  {lastChangeInline(r.lastChange)}
-                </div>
-                {/* Nota: no rendereamos la celda “add-col” en filas (queda la pista vacía) */}
-              </div>
-            );
-          })
-        )}
+                    {/* Celdas de datos */}
+                    {fields.map((f) => (
+                      <td
+                        key={`${r.id}-${f.id}`}
+                        className="px-4 py-3 border-r border-gray-200 align-top"
+                        data-type={toDataTypeAttr(f.type)}
+                        title={printCellTitle(fieldById(f.id), r.values[String(f.id)])}
+                        style={{ width: (colWidths[f.id] ?? DEFAULT_COL_W), minWidth: (colWidths[f.id] ?? DEFAULT_COL_W) }}
+                      >
+                        {effectivePerms.canUpdate ? (
+                          <CellEditor
+                            field={f}
+                            value={r.values[String(f.id)] ?? null}
+                            onCommit={(val) => commitCell(r.id, f.id, val)}
+                          />
+                        ) : (
+                          <ReadonlyCell field={f} value={r.values[String(f.id)] ?? null} />
+                        )}
+                      </td>
+                    ))}
 
-        {effectivePerms.canCreate && (
-          <div className="grid-add-row">
-            <button className="grid-add-btn" title="Agregar fila" onClick={handleAddRow}>+</button>
-          </div>
-        )}
+                    {/* Última actividad */}
+                    <td
+                      className="px-4 py-3 text-sm text-gray-700"
+                      title={lastChangeTitle(r.lastChange)}
+                      style={{ width: lastColW, minWidth: lastColW }}
+                    >
+                      {lastChangeInline(r.lastChange)}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
+
+      {/* Row menu */}
+      {rowMenu && (
+        <RowMenu
+          ref={rowMenuRef}
+          x={rowMenu.x}
+          y={rowMenu.y}
+          canDelete={effectivePerms.canDelete}
+          onClose={() => setRowMenu(null)}
+          onOpenComments={() => {
+            const rid = rowMenu.recordId;
+            setRowMenu(null);
+            setCmtPanel({ open: true, recordId: rid });
+          }}
+          onDelete={() => {
+            const rid = rowMenu.recordId;
+            handleDeleteRow(rid);
+            setRowMenu(null);
+          }}
+        />
+      )}
 
       {/* Column menu */}
       {columnMenu && canManageFields && (
@@ -679,27 +840,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
             }
           }}
           onDelete={() => handleDeleteColumn(columnMenu.field.id)}
-        />
-      )}
-
-      {/* Row menu */}
-      {rowMenu && (
-        <RowMenu
-          ref={rowMenuRef}
-          x={rowMenu.x}
-          y={rowMenu.y}
-          canDelete={effectivePerms.canDelete}
-          onClose={() => setRowMenu(null)}
-          onOpenComments={() => {
-            const rid = rowMenu.recordId;
-            setRowMenu(null);
-            setCmtPanel({ open: true, recordId: rid });
-          }}
-          onDelete={() => {
-            const rid = rowMenu.recordId;
-            handleDeleteRow(rid);
-            setRowMenu(null);
-          }}
         />
       )}
 
@@ -773,6 +913,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
         </Modal>
       )}
 
+      {/* Panel de comentarios */}
       {cmtPanel.open && cmtPanel.recordId != null && (
         <CommentsPanel
           baseId={baseId}
