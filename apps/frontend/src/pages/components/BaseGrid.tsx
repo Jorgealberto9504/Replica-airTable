@@ -16,6 +16,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { confirmToast } from '../../ui/confirmToast';
 // Si ya migraste a tu Modal genérico, descomenta esta línea y usa <Modal> abajo
 // import Modal from '../../components/Modal';
+import { measureAsync } from '../../utils/metrics';
 
 type GridItem = BaseItem & { ownerName?: string };
 
@@ -86,7 +87,9 @@ export default function BaseGrid({
       setLoading(true);
       try {
         if (workspaceId === 0) {
-          const r = await listBases({ page, pageSize, q: searchQuery });
+          const r = await measureAsync('bases.listAll', () =>
+            listBases({ page, pageSize, q: searchQuery })
+          );
           if (!alive) return;
           const rows: GridItem[] = r.bases.map((b: any) => ({
             id: b.id,
@@ -100,7 +103,9 @@ export default function BaseGrid({
           setItems(rows);
           setTotal(r.total ?? null);
         } else if (workspaceId) {
-          const r = await listBasesForWorkspace(workspaceId);
+          const r = await measureAsync('bases.listByWs', () =>
+            listBasesForWorkspace(workspaceId)
+          );
           if (!alive) return;
           let rows: GridItem[] = (r.bases as any[]).map((b: any) => ({
             ...b,
@@ -158,7 +163,9 @@ export default function BaseGrid({
 
   const refreshData = useCallback(async () => {
     if (workspaceId === 0) {
-      const r = await listBases({ page, pageSize, q: searchQuery });
+      const r = await measureAsync('bases.listAll', () =>
+        listBases({ page, pageSize, q: searchQuery })
+      );
       const rows: GridItem[] = r.bases.map((b: any) => ({
         id: b.id,
         name: b.name,
@@ -171,7 +178,9 @@ export default function BaseGrid({
       setItems(rows);
       setTotal(r.total ?? null);
     } else if (workspaceId) {
-      const r = await listBasesForWorkspace(workspaceId);
+      const r = await measureAsync('bases.listByWs', () =>
+        listBasesForWorkspace(workspaceId)
+      );
       let rows: GridItem[] = (r.bases as any[]).map((b: any) => ({
         ...b,
         ownerId: b.ownerId ?? 0,
@@ -193,7 +202,7 @@ export default function BaseGrid({
     if (!name) return;
 
     try {
-      await renameBase(renameOpen.id, name);
+      await measureAsync('bases.rename', () => renameBase(renameOpen.id!, name));
       await refreshData();
     } catch (e: any) {
       alert(e?.message || 'No se pudo renombrar la base');
@@ -207,7 +216,9 @@ export default function BaseGrid({
     if (!b || !canManageBase(b)) { setPrivacyOpen({ open: false, v: 'PRIVATE' }); return; }
 
     try {
-      await updateBaseVisibility(privacyOpen.id, privacyOpen.v);
+      await measureAsync('bases.changeVisibility', () =>
+        updateBaseVisibility(privacyOpen.id!, privacyOpen.v)
+      );
       await refreshData();
     } catch (e: any) {
       alert(e?.message || 'No se pudo actualizar la privacidad');
@@ -230,7 +241,7 @@ export default function BaseGrid({
     if (!ok) return;
 
     try {
-      await deleteBase(id);
+      await measureAsync('bases.delete', () => deleteBase(id));
 
       // Ajustar página si cambia el total
       const nextCount = (total ?? items.length) - 1;
@@ -338,7 +349,7 @@ export default function BaseGrid({
             </h3>
           </div>
 
-          {canManage && (
+        {canManage && (
             <button
               className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-gray-600 transition-all duration-200 ml-2 flex-shrink-0 p-1 rounded hover:bg-gray-100"
               aria-label={`Acciones para ${b.name}`}

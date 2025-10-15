@@ -1,4 +1,3 @@
-// apps/backend/src/app.ts
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -13,37 +12,39 @@ import membersRouter from './routes/members.routes.js';
 import basesRouter from './routes/bases.routes.js';
 import tablesRouter from './routes/tables.routes.js';
 import workspacesRouter from './routes/workspaces.routes.js';
-
-// Endpoints CRUD de columnas y registros
 import fieldsRouter from './routes/fields.routes.js';
 import recordsRouter from './routes/records.routes.js';
-
 import auditRoutes from './routes/audit.routes.js';
+
 import { errorHandler } from './middlewares/error.middleware.js';
+import { requestIdMiddleware } from './middlewares/request-id.middleware.js';
+import { reqTimingMiddleware } from './middlewares/req-timing.middleware.js';
 
 const app = express();
 
-// --- ajustes seguros / performance (no rompen FE) ---
-app.disable('x-powered-by');
-app.set('trust proxy', 1); // por si algún día hay proxy / https
+// Diagnóstico
+app.use(requestIdMiddleware);
+app.use(reqTimingMiddleware);
 
-// CORS (permite tu FRONTEND y los localhost típicos de dev)
+// Hardening / proxies
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
+
+// CORS (dev)
 const FRONTEND = process.env.FRONTEND_ORIGIN;
 const allowed = new Set(
   [FRONTEND, 'http://localhost:5173', 'http://127.0.0.1:5173'].filter(Boolean) as string[]
 );
-app.use(
-  cors({
-    origin(origin, cb) {
-      // permitir herramientas sin Origin (curl/postman)
-      if (!origin) return cb(null, true);
-      return cb(null, allowed.has(origin));
-    },
-    credentials: true,
-  })
-);
+const corsOpts: cors.CorsOptions = {
+  origin(origin, cb) {
+    if (!origin) return cb(null, true); // curl/postman
+    return cb(null, allowed.has(origin));
+  },
+  credentials: true,
+};
+app.use(cors(corsOpts));
 
-// Seguridad de cabeceras sin CSP (para no interferir en dev)
+// Seguridad
 app.use(
   helmet({
     contentSecurityPolicy: false,
@@ -51,35 +52,25 @@ app.use(
   })
 );
 
-// Compresión de respuestas grandes (lista de registros, etc.)
+// Compresión + body + cookies
 app.use(compression());
-
-// Body & cookies
-app.use(express.json({ limit: '1mb' })); // subimos un poco el límite por comodidad
+app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 
-// ---------- rutas ----------
+// Rutas
 app.use('/health', healthRouter);
 app.use('/db', dbRouter);
 app.use('/auth', authRouter);
 app.use('/users', usersRouter);
-
-// /bases/*
 app.use('/bases', membersRouter);
 app.use('/bases', basesRouter);
 app.use('/bases', tablesRouter);
-
-// /workspaces/*
 app.use('/workspaces', workspacesRouter);
-
-// Rutas anidadas de tablas (cada subrouter ya usa mergeParams:true)
 app.use('/bases/:baseId/tables/:tableId/fields', fieldsRouter);
 app.use('/bases/:baseId/tables/:tableId/records', recordsRouter);
-
-// Auditoría
 app.use('/', auditRoutes);
 
-// Manejo de errores (siempre al final)
+// Errores (al final)
 app.use(errorHandler);
 
 export default app;

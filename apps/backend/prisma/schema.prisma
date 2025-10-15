@@ -1,18 +1,291 @@
-// === Cliente de Prisma (genera tipos y métodos tipados) ===
 generator client {
   provider = "prisma-client-js"
 }
 
-// === Fuente de datos: Postgres (URL viene de .env) ===
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_DATABASE_URL") // usa la conexión directa en migraciones
+  directUrl = env("DIRECT_DATABASE_URL")
 }
 
-/* ============================================================
-   ENUMS
-   ============================================================ */
+model User {
+  id                  Int                  @id @default(autoincrement())
+  email               String               @unique
+  fullName            String
+  passwordHash        String
+  createdAt           DateTime             @default(now())
+  isActive            Boolean              @default(true)
+  mustChangePassword  Boolean              @default(true)
+  passwordUpdatedAt   DateTime?
+  platformRole        PlatformRole         @default(USER)
+  canCreateBases      Boolean              @default(false)
+  auditEvents         AuditEvent[]         @relation("AuditByUser")
+  ownedBases          Base[]               @relation("BaseOwner")
+  baseMembers         BaseMember[]
+  commentsCreated     Comment[]            @relation("CommentAuthor")
+  commentsUpdated     Comment[]            @relation("CommentEditor")
+  fieldsCreated       Field[]              @relation("FieldCreatedBy")
+  fieldsUpdated       Field[]              @relation("FieldUpdatedBy")
+  passwordResetTokens PasswordResetToken[]
+  recordCellsCreated  RecordCell[]         @relation("RecordCellCreatedBy")
+  recordCellsUpdated  RecordCell[]         @relation("RecordCellUpdatedBy")
+  recordsCreated      RecordRow[]          @relation("RecordRowCreatedBy")
+  recordsUpdated      RecordRow[]          @relation("RecordRowUpdatedBy")
+  ownedWorkspaces     Workspace[]          @relation("WorkspaceOwner")
+}
+
+model Workspace {
+  id        Int       @id @default(autoincrement())
+  name      String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  ownerId   Int
+  isTrashed Boolean   @default(false)
+  trashedAt DateTime?
+  bases     Base[]
+  owner     User      @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+
+  @@unique([ownerId, name, isTrashed])
+  @@index([ownerId])
+  @@index([isTrashed])
+  @@index([trashedAt])
+}
+
+model Base {
+  id          Int            @id @default(autoincrement())
+  name        String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  workspaceId Int?
+  ownerId     Int
+  visibility  BaseVisibility @default(PRIVATE)
+  isTrashed   Boolean        @default(false)
+  trashedAt   DateTime?
+  auditEvents AuditEvent[]
+  owner       User           @relation("BaseOwner", fields: [ownerId], references: [id])
+  workspace   Workspace?     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  members     BaseMember[]
+  tables      TableDef[]
+
+  @@unique([ownerId, name, isTrashed])
+  @@index([ownerId])
+  @@index([visibility])
+  @@index([workspaceId])
+  @@index([trashedAt])
+  @@index([isTrashed])
+}
+
+model BaseMember {
+  id        Int      @id @default(autoincrement())
+  baseId    Int
+  userId    Int
+  role      BaseRole @default(VIEWER)
+  createdAt DateTime @default(now())
+  base      Base     @relation(fields: [baseId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([baseId, userId])
+}
+
+model TableDef {
+  id          Int          @id @default(autoincrement())
+  baseId      Int
+  name        String
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  position    Int          @default(0)
+  isTrashed   Boolean      @default(false)
+  trashedAt   DateTime?
+  auditEvents AuditEvent[]
+  fields      Field[]
+  records     RecordRow[]
+  base        Base         @relation(fields: [baseId], references: [id], onDelete: Cascade)
+
+  @@unique([baseId, name, isTrashed])
+  @@index([baseId])
+  @@index([trashedAt])
+  @@index([isTrashed])
+  @@index([baseId, position])
+}
+
+model Field {
+  id          Int            @id @default(autoincrement())
+  tableId     Int
+  name        String
+  type        FieldType
+  config      Json?
+  position    Int            @default(0)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  createdById Int?
+  updatedById Int?
+  isTrashed   Boolean        @default(false)
+  trashedAt   DateTime?
+  auditEvents AuditEvent[]
+  createdBy   User?          @relation("FieldCreatedBy", fields: [createdById], references: [id])
+  table       TableDef       @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  updatedBy   User?          @relation("FieldUpdatedBy", fields: [updatedById], references: [id])
+  cells       RecordCell[]
+  options     SelectOption[]
+
+  @@unique([tableId, name, isTrashed])
+  @@index([tableId, position])
+  @@index([isTrashed])
+  @@index([trashedAt])
+}
+
+/// Opciones para SINGLE_SELECT / MULTI_SELECT
+model SelectOption {
+  id          Int                @id @default(autoincrement())
+  fieldId     Int
+  label       String
+  color       String?
+  position    Int                @default(0)
+  isTrashed   Boolean            @default(false)
+  trashedAt   DateTime?
+  singleCells RecordCell[]
+  usedBy      RecordCellOption[]
+  field       Field              @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  @@unique([fieldId, label, isTrashed])
+  @@index([fieldId, position])
+  @@index([isTrashed])
+  @@index([trashedAt])
+}
+
+model RecordRow {
+  id          Int          @id @default(autoincrement())
+  tableId     Int
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  createdById Int?
+  updatedById Int?
+  isTrashed   Boolean      @default(false)
+  trashedAt   DateTime?
+  auditEvents AuditEvent[]
+  comments    Comment[]
+  cells       RecordCell[]
+  createdBy   User?        @relation("RecordRowCreatedBy", fields: [createdById], references: [id])
+  table       TableDef     @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  updatedBy   User?        @relation("RecordRowUpdatedBy", fields: [updatedById], references: [id])
+
+  @@index([tableId])
+  @@index([updatedAt])
+  @@index([isTrashed])
+  @@index([trashedAt])
+}
+
+model RecordCell {
+  id             Int                @id @default(autoincrement())
+  recordId       Int
+  fieldId        Int
+  stringValue    String?
+  numberValue    Decimal?
+  boolValue      Boolean?
+  dateValue      DateTime?
+  datetimeValue  DateTime?
+  createdAt      DateTime           @default(now())
+  createdById    Int?
+  updatedAt      DateTime           @updatedAt
+  updatedById    Int?
+  selectOptionId Int?
+  timeMinutes    Int?
+  createdBy      User?              @relation("RecordCellCreatedBy", fields: [createdById], references: [id])
+  field          Field              @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  record         RecordRow          @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  selectOption   SelectOption?      @relation(fields: [selectOptionId], references: [id])
+  updatedBy      User?              @relation("RecordCellUpdatedBy", fields: [updatedById], references: [id])
+  options        RecordCellOption[]
+
+  @@unique([recordId, fieldId])
+  @@index([fieldId])
+  @@index([numberValue])
+  @@index([datetimeValue])
+}
+
+model RecordCellOption {
+  recordCellId Int
+  optionId     Int
+  createdAt    DateTime     @default(now())
+  option       SelectOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  recordCell   RecordCell   @relation(fields: [recordCellId], references: [id], onDelete: Cascade)
+
+  @@id([recordCellId, optionId])
+  @@index([optionId])
+}
+
+/// ============================================================
+///    COMENTARIOS (por fila, sin hilos)
+///    ============================================================
+model Comment {
+  id          Int       @id @default(autoincrement())
+  recordId    Int
+  body        String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  createdById Int?
+  updatedById Int?
+  isTrashed   Boolean   @default(false)
+  trashedAt   DateTime?
+  createdBy   User?     @relation("CommentAuthor", fields: [createdById], references: [id])
+  record      RecordRow @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  updatedBy   User?     @relation("CommentEditor", fields: [updatedById], references: [id])
+
+  @@index([recordId, createdAt])
+  @@index([isTrashed])
+  @@index([trashedAt])
+}
+
+/// ============================================================
+///    NEW: AUDITORÍA (historial de eventos)
+///    - Un registro por acción relevante (crear/renombrar/trash/etc.)
+///    - Siempre ligado a una Base (baseId); opcionalmente a tabla/fila/campo.
+///    - Guarda actor (userId, ip), acción (enum) y payload (details) para diffs.
+///    ============================================================
+model AuditEvent {
+  id        BigInt      @id @default(autoincrement())
+  createdAt DateTime    @default(now())
+  userId    Int?
+  ip        String?
+  baseId    Int
+  tableId   Int?
+  recordId  Int?
+  fieldId   Int?
+  action    AuditAction
+  summary   String
+  details   Json?
+  base      Base        @relation(fields: [baseId], references: [id], onDelete: Cascade)
+  field     Field?      @relation(fields: [fieldId], references: [id])
+  record    RecordRow?  @relation(fields: [recordId], references: [id])
+  table     TableDef?   @relation(fields: [tableId], references: [id])
+  user      User?       @relation("AuditByUser", fields: [userId], references: [id])
+
+  @@index([baseId, createdAt])
+  @@index([tableId])
+  @@index([recordId])
+  @@index([fieldId])
+  @@index([userId])
+}
+
+/// ============================================================
+///    NEW: Password Reset Tokens
+///    - Soporte para “Olvidé mi contraseña”.
+///    - Token de un solo uso con expiración y marca de uso.
+///    ============================================================
+model PasswordResetToken {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  ip        String?
+  userAgent String?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
 
 enum PlatformRole {
   USER
@@ -38,403 +311,37 @@ enum FieldType {
   CHECKBOX
   DATE
   DATETIME
-  TIME          // minutos desde medianoche
+  TIME
   SINGLE_SELECT
   MULTI_SELECT
 }
 
-/* === NEW: Acciones de auditoría ============================================
-   La app registrará un AuditEvent con una de estas acciones
-   ========================================================================== */
+/// === NEW: Acciones de auditoría ============================================
+///    La app registrará un AuditEvent con una de estas acciones
+///    ==========================================================================
 enum AuditAction {
-  // Base
   BASE_CREATED
   BASE_RENAMED
   BASE_VISIBILITY_CHANGED
   BASE_TRASHED
   BASE_RESTORED
-
-  // Tabla
   TABLE_CREATED
   TABLE_RENAMED
   TABLE_TRASHED
   TABLE_RESTORED
   TABLE_REORDERED
-
-  // Campo
   FIELD_CREATED
   FIELD_UPDATED
   FIELD_TRASHED
   FIELD_RESTORED
-
-  // Registro
   RECORD_CREATED
   RECORD_UPDATED
   RECORD_TRASHED
   RECORD_RESTORED
-
-  // Comentarios
   COMMENT_CREATED
   COMMENT_EDITED
   COMMENT_TRASHED
-
-  // Miembros
   MEMBER_INVITED
   MEMBER_ROLE_CHANGED
   MEMBER_REMOVED
-}
-
-/* ============================================================
-   MODELOS PRINCIPALES
-   ============================================================ */
-
-model User {
-  id           Int      @id @default(autoincrement())
-  email        String   @unique
-  fullName     String
-  passwordHash String
-  createdAt    DateTime @default(now())
-
-  isActive           Boolean   @default(true)
-  mustChangePassword Boolean   @default(true)
-  passwordUpdatedAt  DateTime?
-
-  platformRole   PlatformRole @default(USER)
-  canCreateBases Boolean      @default(false)
-
-  ownedBases      Base[]       @relation("BaseOwner")
-  baseMembers     BaseMember[]
-  ownedWorkspaces Workspace[]  @relation("WorkspaceOwner")
-
-  fieldsCreated  Field[]     @relation("FieldCreatedBy")
-  fieldsUpdated  Field[]     @relation("FieldUpdatedBy")
-  recordsCreated RecordRow[] @relation("RecordRowCreatedBy")
-  recordsUpdated RecordRow[] @relation("RecordRowUpdatedBy")
-
-  recordCellsCreated RecordCell[] @relation("RecordCellCreatedBy")
-  recordCellsUpdated RecordCell[] @relation("RecordCellUpdatedBy")
-
-  // Comentarios
-  commentsCreated Comment[] @relation("CommentAuthor")
-  commentsUpdated Comment[] @relation("CommentEditor")
-
-  // Eventos de auditoría generados por este usuario
-  auditEvents AuditEvent[] @relation("AuditByUser")
-
-  // NEW: tokens de restablecimiento de contraseña
-  passwordResetTokens PasswordResetToken[]
-}
-
-model Workspace {
-  id        Int      @id @default(autoincrement())
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  ownerId Int
-  owner   User @relation("WorkspaceOwner", fields: [ownerId], references: [id])
-
-  isTrashed Boolean   @default(false)
-  trashedAt DateTime?
-
-  bases Base[]
-
-  @@unique([ownerId, name, isTrashed])
-  @@index([ownerId])
-  @@index([isTrashed])
-  @@index([trashedAt])
-}
-
-model Base {
-  id        Int      @id @default(autoincrement())
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  workspaceId Int?
-  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-
-  ownerId Int
-  owner   User @relation("BaseOwner", fields: [ownerId], references: [id])
-
-  visibility BaseVisibility @default(PRIVATE)
-
-  isTrashed Boolean   @default(false)
-  trashedAt DateTime?
-
-  members BaseMember[]
-  tables  TableDef[]
-
-  // backref de auditoría (eventos de esta base)
-  auditEvents AuditEvent[]
-
-  @@unique([ownerId, name, isTrashed])
-  @@index([ownerId])
-  @@index([visibility])
-  @@index([workspaceId])
-  @@index([trashedAt])
-  @@index([isTrashed])
-}
-
-model BaseMember {
-  id        Int      @id @default(autoincrement())
-  baseId    Int
-  userId    Int
-  role      BaseRole @default(VIEWER)
-  createdAt DateTime @default(now())
-
-  base Base @relation(fields: [baseId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([baseId, userId])
-}
-
-model TableDef {
-  id        Int      @id @default(autoincrement())
-  baseId    Int
-  name      String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  position  Int      @default(0)
-
-  isTrashed Boolean   @default(false)
-  trashedAt DateTime?
-
-  base    Base        @relation(fields: [baseId], references: [id], onDelete: Cascade)
-  fields  Field[]
-  records RecordRow[]
-
-  // backref de auditoría
-  auditEvents AuditEvent[]
-
-  @@unique([baseId, name, isTrashed])
-  @@index([baseId])
-  @@index([trashedAt])
-  @@index([isTrashed])
-  @@index([baseId, position])
-}
-
-/* ============================================================
-   COLUMNAS / REGISTROS
-   ============================================================ */
-
-model Field {
-  id       Int       @id @default(autoincrement())
-  tableId  Int
-  name     String
-  type     FieldType
-  config   Json?
-  position Int       @default(0)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  createdById Int?
-  createdBy   User? @relation("FieldCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedById Int?
-  updatedBy   User? @relation("FieldUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-
-  isTrashed Boolean   @default(false)
-  trashedAt DateTime?
-
-  table   TableDef       @relation(fields: [tableId], references: [id], onDelete: Cascade)
-  cells   RecordCell[]
-  options SelectOption[] // para SINGLE/MULTI
-
-  // backref de auditoría
-  auditEvents AuditEvent[]
-
-  @@unique([tableId, name, isTrashed])
-  @@index([tableId, position])
-  @@index([isTrashed])
-  @@index([trashedAt])
-}
-
-/* Opciones para SINGLE_SELECT / MULTI_SELECT */
-model SelectOption {
-  id      Int   @id @default(autoincrement())
-  fieldId Int
-  field   Field @relation(fields: [fieldId], references: [id], onDelete: Cascade)
-
-  label    String
-  color    String?
-  position Int     @default(0)
-
-  isTrashed Boolean   @default(false)
-  trashedAt DateTime?
-
-  // m2m (MULTI_SELECT)
-  usedBy RecordCellOption[]
-
-  // backref del SINGLE_SELECT (Prisma lo infiere por selectOptionId)
-  singleCells RecordCell[]
-
-  @@unique([fieldId, label, isTrashed])
-  @@index([fieldId, position])
-  @@index([isTrashed])
-  @@index([trashedAt])
-}
-
-model RecordRow {
-  id      Int @id @default(autoincrement())
-  tableId Int
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  createdById Int?
-  createdBy   User? @relation("RecordRowCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedById Int?
-  updatedBy   User? @relation("RecordRowUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-
-  isTrashed Boolean   @default(false)
-  trashedAt DateTime?
-
-  table TableDef     @relation(fields: [tableId], references: [id], onDelete: Cascade)
-  cells RecordCell[]
-
-  comments Comment[] // comentarios asociados a esta fila
-
-  // backref de auditoría
-  auditEvents AuditEvent[]
-
-  @@index([tableId])
-  @@index([updatedAt])
-  @@index([isTrashed])
-  @@index([trashedAt])
-}
-
-model RecordCell {
-  id       Int @id @default(autoincrement())
-  recordId Int
-  fieldId  Int
-
-  record RecordRow @relation(fields: [recordId], references: [id], onDelete: Cascade)
-  field  Field     @relation(fields: [fieldId], references: [id], onDelete: Cascade)
-
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  createdById Int?
-  createdBy   User?    @relation("RecordCellCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedById Int?
-  updatedBy   User?    @relation("RecordCellUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-
-  // valores por tipo
-  stringValue   String?
-  numberValue   Decimal?
-  boolValue     Boolean?
-  dateValue     DateTime?
-  datetimeValue DateTime?
-
-  // TIME
-  timeMinutes Int?
-
-  // SINGLE_SELECT (relación directa)
-  selectOptionId Int?
-  selectOption   SelectOption? @relation(fields: [selectOptionId], references: [id], onDelete: SetNull)
-
-  // MULTI_SELECT (m2m)
-  options RecordCellOption[]
-
-  @@unique([recordId, fieldId])
-  @@index([fieldId])
-  @@index([numberValue])
-  @@index([datetimeValue])
-}
-
-model RecordCellOption {
-  recordCellId Int
-  optionId     Int
-  createdAt    DateTime @default(now())
-
-  recordCell RecordCell   @relation(fields: [recordCellId], references: [id], onDelete: Cascade)
-  option     SelectOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
-
-  @@id([recordCellId, optionId])
-  @@index([optionId])
-}
-
-/* ============================================================
-   COMENTARIOS (por fila, sin hilos)
-   ============================================================ */
-model Comment {
-  id          Int       @id @default(autoincrement())
-  recordId    Int
-  record      RecordRow  @relation(fields: [recordId], references: [id], onDelete: Cascade)
-
-  body        String
-
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
-
-  createdById Int?
-  createdBy   User?      @relation("CommentAuthor", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedById Int?
-  updatedBy   User?      @relation("CommentEditor", fields: [updatedById], references: [id], onDelete: SetNull)
-
-  isTrashed   Boolean    @default(false)
-  trashedAt   DateTime?
-
-  @@index([recordId, createdAt])
-  @@index([isTrashed])
-  @@index([trashedAt])
-}
-
-/* ============================================================
-   NEW: AUDITORÍA (historial de eventos)
-   - Un registro por acción relevante (crear/renombrar/trash/etc.)
-   - Siempre ligado a una Base (baseId); opcionalmente a tabla/fila/campo.
-   - Guarda actor (userId, ip), acción (enum) y payload (details) para diffs.
-   ============================================================ */
-model AuditEvent {
-  id        BigInt   @id @default(autoincrement())
-  createdAt DateTime @default(now())
-
-  // actor
-  userId Int?
-  user   User? @relation(name: "AuditByUser", fields: [userId], references: [id], onDelete: SetNull)
-  ip     String?
-
-  // ámbito
-  baseId   Int
-  base     Base      @relation(fields: [baseId], references: [id], onDelete: Cascade)
-  tableId  Int?
-  table    TableDef?  @relation(fields: [tableId], references: [id], onDelete: SetNull)
-  recordId Int?
-  record   RecordRow? @relation(fields: [recordId], references: [id], onDelete: SetNull)
-  fieldId  Int?
-  field    Field?     @relation(fields: [fieldId], references: [id], onDelete: SetNull)
-
-  // acción
-  action  AuditAction
-  summary String
-  details Json?
-
-  @@index([baseId, createdAt])
-  @@index([tableId])
-  @@index([recordId])
-  @@index([fieldId])
-  @@index([userId])
-}
-
-/* ============================================================
-   NEW: Password Reset Tokens
-   - Soporte para “Olvidé mi contraseña”.
-   - Token de un solo uso con expiración y marca de uso.
-   ============================================================ */
-model PasswordResetToken {
-  id         Int      @id @default(autoincrement())
-  userId     Int
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  tokenHash  String   @unique            // hash (sha256) del token raw
-  expiresAt  DateTime                    // cuándo expira el enlace
-  usedAt     DateTime?                   // marca de consumo (si ya se usó)
-  createdAt  DateTime @default(now())
-
-  ip         String?
-  userAgent  String?
-
-  @@index([userId])
-  @@index([expiresAt])
 }

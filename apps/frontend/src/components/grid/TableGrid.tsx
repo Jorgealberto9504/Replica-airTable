@@ -24,6 +24,7 @@ import RowMenu from './RowMenu';
 
 import GridFilters, { type FiltersValue } from './GridFilters';
 import GridSorts from './GridSorts';
+import { measureAsync } from '../../utils/metrics';
 
 /* ===== lastChange (como lo envía tu backend) ===== */
 type LastChange =
@@ -284,16 +285,18 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       setLoading(true);
       setError(null);
       try {
-        const b = await bootstrapGrid(
-          baseId,
-          tableId,
-          {
-            page, pageSize,
-            logic: filters.logic,
-            filters: filters.filters,
-            sort,
-          },
-          ac.signal
+        const b = await measureAsync('grid.bootstrap', () =>
+          bootstrapGrid(
+            baseId,
+            tableId,
+            {
+              page, pageSize,
+              logic: filters.logic,
+              filters: filters.filters,
+              sort,
+            },
+            ac.signal
+          )
         );
         if (!alive) return;
 
@@ -354,7 +357,9 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     );
 
     try {
-      await patchRecord(baseId, tableId, recordId, { [String(fieldId)]: next });
+      await measureAsync('record.patchCell', () =>
+        patchRecord(baseId, tableId, recordId, { [String(fieldId)]: next })
+      );
     } catch (e: any) {
       alert(e?.message || 'No se pudo guardar');
       setPage(p => p); // fuerza re-render en la siguiente carga
@@ -364,7 +369,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   async function handleAddRow() {
     if (!effectivePerms.canCreate) { alert('No tienes permisos para crear registros.'); return; }
     try {
-      const r = await createRecord(baseId, tableId, {});
+      const r = await measureAsync('record.create', () => createRecord(baseId, tableId, {}));
       setRecords((prev) => [...prev, { id: r.record.id, values: {} }]);
       setTotal((t) => t + 1);
       setTimeout(() => containerRef.current?.scrollTo({ top: 999999, behavior: 'smooth' }), 50);
@@ -375,7 +380,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     if (!effectivePerms.canDelete) { alert('No tienes permisos para eliminar registros.'); return; }
     if (!confirm('¿Eliminar esta fila?')) return;
     try {
-      await deleteRecord(baseId, tableId, id);
+      await measureAsync('record.delete', () => deleteRecord(baseId, tableId, id));
       setRecords((prev) => prev.filter((r) => r.id !== id));
       setTotal((t) => Math.max(0, t - 1));
       setCommentCounts(prev => { const n = { ...prev }; delete n[id]; return n; });
@@ -390,7 +395,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     const MENU_W = 240;
     const margin = 8;
     const x = Math.min(
-      Math.max(margin, rect.right - MENU_W),             // alinear aprox al borde derecho del botón
+      Math.max(margin, rect.right - MENU_W),
       window.innerWidth - MENU_W - margin
     );
     const y = Math.min(rect.bottom + 8, window.innerHeight - margin);

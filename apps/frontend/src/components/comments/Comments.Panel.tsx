@@ -1,3 +1,4 @@
+// apps/frontend/src/components/comments/Comments.Panel.tsx
 import { useEffect, useRef, useState, memo } from 'react';
 import { createPortal } from 'react-dom';
 import type { Comment } from '../../api/comments';
@@ -7,6 +8,7 @@ import {
   deleteComment,
   updateComment,
 } from '../../api/comments';
+import { measureAsync } from '../../utils/metrics';
 
 type Props = {
   baseId: number;
@@ -59,7 +61,7 @@ function CommentsPanelInner({
     setLoading(true);
     setErr(null);
 
-    listComments(baseId, tableId, recordId, 1, 200)
+    measureAsync('comments.list', () => listComments(baseId, tableId, recordId, 1, 200))
       .then((r) => {
         if (!alive) return;
         commentCache.set(cacheKey, r.comments);
@@ -108,7 +110,9 @@ function CommentsPanelInner({
     scrollToBottom();
 
     try {
-      const r = await createComment(baseId, tableId, recordId, body);
+      const r = await measureAsync('comments.create', () =>
+        createComment(baseId, tableId, recordId, body)
+      );
       setItems((prev) =>
         prev.map((c) => (c.id === tempId ? (r.comment as LocalComment) : c))
       );
@@ -138,7 +142,9 @@ function CommentsPanelInner({
     const old = items;
     setItems((prev) => prev.filter((c) => c.id !== id));
     try {
-      await deleteComment(baseId, tableId, recordId, id);
+      await measureAsync('comments.delete', () =>
+        deleteComment(baseId, tableId, recordId, id)
+      );
       commentCache.set(cacheKey, old.filter((c) => c.id !== id));
       onDeltaCount?.(-1);
     } catch (e: any) {
@@ -149,7 +155,9 @@ function CommentsPanelInner({
 
   async function handleUpdate(id: number, newBody: string) {
     try {
-      await updateComment(baseId, tableId, recordId, id, newBody);
+      await measureAsync('comments.update', () =>
+        updateComment(baseId, tableId, recordId, id, newBody)
+      );
       setItems((prev) =>
         prev.map((c) => (c.id === id ? { ...c, body: newBody } : c))
       );
@@ -205,7 +213,9 @@ function CommentsPanelInner({
                   commentCache.delete(cacheKey);
                   setErr(null);
                   setLoading(true);
-                  listComments(baseId, tableId, recordId, 1, 200)
+                  measureAsync('comments.list', () =>
+                    listComments(baseId, tableId, recordId, 1, 200)
+                  )
                     .then((r) => {
                       commentCache.set(cacheKey, r.comments);
                       setItems(r.comments);
