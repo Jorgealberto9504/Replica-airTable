@@ -1,3 +1,4 @@
+// apps/backend/src/app.ts
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -15,6 +16,7 @@ import workspacesRouter from './routes/workspaces.routes.js';
 import fieldsRouter from './routes/fields.routes.js';
 import recordsRouter from './routes/records.routes.js';
 import auditRoutes from './routes/audit.routes.js';
+import commentsRouter from './routes/comments.routes.js'; // 👈 NUEVO
 
 import { errorHandler } from './middlewares/error.middleware.js';
 import { requestIdMiddleware } from './middlewares/request-id.middleware.js';
@@ -30,7 +32,7 @@ app.use(reqTimingMiddleware);
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
-// CORS (dev)
+// CORS
 const FRONTEND = process.env.FRONTEND_ORIGIN;
 const allowed = new Set(
   [FRONTEND, 'http://localhost:5173', 'http://127.0.0.1:5173'].filter(Boolean) as string[]
@@ -68,6 +70,7 @@ app.use('/bases', tablesRouter);
 app.use('/workspaces', workspacesRouter);
 app.use('/bases/:baseId/tables/:tableId/fields', fieldsRouter);
 app.use('/bases/:baseId/tables/:tableId/records', recordsRouter);
+app.use('/bases/:baseId/tables/:tableId/records/:recordId/comments', commentsRouter); // 👈 MONTA COMENTARIOS
 app.use('/', auditRoutes);
 
 // Errores (al final)

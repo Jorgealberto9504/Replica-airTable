@@ -3,13 +3,19 @@ import 'dotenv/config';
 import app from './app.js';
 import { startTrashPurgeJob } from './jobs/trash-purge.job.js';
 import { verifyMailer } from './services/mailer.js';
+import { initRealtime } from './realtime/hub.js';
 
 const PORT = Number(process.env.PORT ?? 8080);
 
+// Arrancamos HTTP y luego acoplamos Socket.IO
 const server = app.listen(PORT, () => {
   console.log(`[server] API escuchando en http://localhost:${PORT} (${process.env.NODE_ENV ?? 'dev'})`);
+  // Realtime
+  initRealtime(server);
+
   // Job de limpieza de papelera
   startTrashPurgeJob();
+
   // Verificar SMTP (no bloquea el arranque)
   verifyMailer().catch((e) => {
     console.error('[mailer] No se pudo verificar SMTP:', e?.message ?? e);
@@ -33,7 +39,6 @@ function shutdown(signal: string) {
   process.on(sig as NodeJS.Signals, () => shutdown(sig))
 );
 
-// Guardas útiles de proceso
 process.on('unhandledRejection', (reason) => {
   console.error('[node] Unhandled promise rejection:', reason);
 });

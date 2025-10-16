@@ -1,7 +1,9 @@
+// apps/backend/src/services/comments.service.ts
 import { prisma } from './db.js';
 import { badRequest, forbidden, notFound } from '../utils/errors.js';
 import { AuditAction, BaseRole, PlatformRole } from '@prisma/client';
 import { logAudit } from './audit.service.js';
+import { emitCommentCreated, emitCommentUpdated, emitCommentTrashed } from '../realtime/hub.js'; // 👈 NUEVO
 
 /* ========= Helpers ========= */
 
@@ -24,7 +26,7 @@ async function canComment(tableId: number, userId: number | null) {
   const { baseId, ownerId } = await getBaseContextByTable(tableId);
 
   const [user, member] = await Promise.all([
-    prisma.user.findUnique({ where: { id: userId }, select: { platformRole: true, id: true } }),
+    prisma.user.findUnique({ where: { id: userId }, select: { platformRole: true, id: true, fullName: true } }),
     prisma.baseMember.findUnique({
       where: { baseId_userId: { baseId, userId } },
       select: { role: true },
@@ -61,14 +63,12 @@ export async function listCommentsSvc(
   page = 1,
   pageSize = 50,
 ) {
-  // ✅ Validación rápida de existencia (usa índice en recordId + tableId)
   const rec = await prisma.recordRow.findFirst({
     where: { id: recordId, tableId, isTrashed: false },
     select: { id: true },
   });
   if (!rec) throw notFound('La fila no existe en esta tabla.');
 
-  // ✅ Consulta optimizada: solo campos necesarios y con join mínimo
   const [items, total] = await Promise.all([
     prisma.comment.findMany({
       where: { recordId, isTrashed: false },
@@ -79,10 +79,9 @@ export async function listCommentsSvc(
         id: true,
         body: true,
         createdAt: true,
-        // ⚡ solo traemos nombre del autor, sin updatedBy (reduce ~50% del peso)
-        createdBy: {
-          select: { id: true, fullName: true },
-        },
+        updatedAt: true,
+        createdBy: { select: { id: true, fullName: true } },
+        updatedBy: { select: { id: true, fullName: true } },
       },
     }),
     prisma.comment.count({ where: { recordId, isTrashed: false } }),
@@ -137,6 +136,17 @@ export async function createCommentSvc(
     details: { commentId: c.id, snippet: makeSnippet(body) },
   });
 
+  // 🔔 Emite evento RT (incluye conteo actual)
+  try {
+    const count = await prisma.comment.count({ where: { recordId, isTrashed: false } });
+    emitCommentCreated(baseId, tableId, recordId, {
+      commentId: c.id,
+      at: new Date().toISOString(),
+      user: userId ? { id: userId } as any : undefined,
+      count,
+    });
+  } catch { /* no romper la respuesta por RT */ }
+
   return c;
 }
 
@@ -175,12 +185,19 @@ export async function updateCommentSvc(
     userId: userId ?? undefined,
     action: AuditAction.COMMENT_EDITED,
     summary: `Editó un comentario en la fila #${recordId}`,
-    details: {
-      commentId,
-      oldSnippet: makeSnippet(current.body),
-      newSnippet: makeSnippet(body),
-    },
+    details: { commentId, oldSnippet: makeSnippet(current.body), newSnippet: makeSnippet(body) },
   });
+
+  // 🔔 Emite evento RT
+  try {
+    const count = await prisma.comment.count({ where: { recordId, isTrashed: false } });
+    emitCommentUpdated(baseId, tableId, recordId, {
+      commentId,
+      at: new Date().toISOString(),
+      user: userId ? { id: userId } as any : undefined,
+      count,
+    });
+  } catch {}
 
   return { ok: true };
 }
@@ -220,10 +237,21 @@ export async function softDeleteCommentSvc(
     details: { commentId, snippet: makeSnippet(c.body) },
   });
 
+  // 🔔 Emite evento RT
+  try {
+    const count = await prisma.comment.count({ where: { recordId, isTrashed: false } });
+    emitCommentTrashed(baseId, tableId, recordId, {
+      commentId,
+      at: new Date().toISOString(),
+      user: userId ? { id: userId } as any : undefined,
+      count,
+    });
+  } catch {}
+
   return { ok: true };
 }
 
-/* ========= NUEVO: Conteo rápido por múltiples records ========= */
+/* ========= Conteo por múltiples records ========= */
 export async function countCommentsForRecordsSvc(
   _baseId: number,
   tableId: number,
@@ -231,7 +259,6 @@ export async function countCommentsForRecordsSvc(
 ) {
   if (!recordIds.length) return {};
 
-  // Verifica que los records pertenezcan a esa tabla y estén activos
   const validRows = await prisma.recordRow.findMany({
     where: { tableId, id: { in: recordIds }, isTrashed: false },
     select: { id: true },

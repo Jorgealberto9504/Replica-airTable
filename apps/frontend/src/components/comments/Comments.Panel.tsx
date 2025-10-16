@@ -1,5 +1,5 @@
 // apps/frontend/src/components/comments/Comments.Panel.tsx
-import { useEffect, useRef, useState, memo } from 'react';
+import { useEffect, useRef, useState, memo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import type { Comment } from '../../api/comments';
 import {
@@ -9,6 +9,7 @@ import {
   updateComment,
 } from '../../api/comments';
 import { measureAsync } from '../../utils/metrics';
+import { useCommentsRealtime } from '../../realtime/useCommentsRealtime';
 
 type Props = {
   baseId: number;
@@ -19,9 +20,7 @@ type Props = {
   onDeltaCount?: (delta: number) => void;
 };
 
-// Cache simple en memoria para no reconsultar de más
 const commentCache = new Map<string, Comment[]>();
-
 type LocalComment = Comment & { __optimistic?: boolean };
 
 function CommentsPanelInner({
@@ -42,6 +41,48 @@ function CommentsPanelInner({
 
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const refetchTimer = useRef<number | null>(null);
+
+  const scrollToBottom = () => {
+    requestAnimationFrame(() => {
+      const el = listRef.current;
+      if (!el) return;
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    });
+  };
+
+  const loadList = useCallback(async () => {
+    setErr(null);
+    setLoading(true);
+    try {
+      const r = await measureAsync('comments.list', () => listComments(baseId, tableId, recordId, 1, 200));
+      commentCache.set(cacheKey, r.comments);
+      setItems(r.comments);
+      scrollToBottom();
+    } catch (e: any) {
+      setErr(e?.message || 'No se pudieron cargar los comentarios');
+    } finally {
+      setLoading(false);
+    }
+  }, [baseId, tableId, recordId, cacheKey]);
+
+  const scheduleRefetch = useCallback(() => {
+    if (refetchTimer.current) return;
+    refetchTimer.current = window.setTimeout(() => {
+      refetchTimer.current = null;
+      loadList();
+    }, 200);
+  }, [loadList]);
+
+  // Cargar (y cache)
+  useEffect(() => {
+    let alive = true;
+    const cached = commentCache.get(cacheKey);
+    if (cached) setItems(cached as LocalComment[]);
+
+    loadList();
+    return () => { alive = false; if (refetchTimer.current) window.clearTimeout(refetchTimer.current); };
+  }, [cacheKey, loadList]);
 
   // Cerrar con Escape
   useEffect(() => {
@@ -52,42 +93,12 @@ function CommentsPanelInner({
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  useEffect(() => {
-    let alive = true;
-
-    const cached = commentCache.get(cacheKey);
-    if (cached) setItems(cached);
-
-    setLoading(true);
-    setErr(null);
-
-    measureAsync('comments.list', () => listComments(baseId, tableId, recordId, 1, 200))
-      .then((r) => {
-        if (!alive) return;
-        commentCache.set(cacheKey, r.comments);
-        setItems(r.comments);
-        scrollToBottom();
-      })
-      .catch((e: any) => {
-        if (alive) setErr(e?.message || 'No se pudieron cargar los comentarios');
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
-      });
-
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseId, tableId, recordId]);
-
-  function scrollToBottom() {
-    requestAnimationFrame(() => {
-      const el = listRef.current;
-      if (!el) return;
-      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-    });
-  }
+  // 🔔 Realtime (refresca lista al recibir eventos)
+  useCommentsRealtime(baseId, tableId, recordId, {
+    onCreated: () => scheduleRefetch(),
+    onUpdated: () => scheduleRefetch(),
+    onTrashed: () => scheduleRefetch(),
+  });
 
   async function handleSend() {
     const body = text.trim();
@@ -126,10 +137,8 @@ function CommentsPanelInner({
 
       onDeltaCount?.(1);
     } catch (e: any) {
-      // revertir optimista
-      setItems((prev) => prev.filter((c) => c.id !== tempId));
+      setItems((prev) => prev.filter((c) => c.id !== tempId)); // revert
       alert(e?.message || 'No se pudo enviar el comentario');
-      // regresa el texto para que el usuario no lo pierda
       setText(body);
       inputRef.current?.focus();
     } finally {
@@ -193,7 +202,6 @@ function CommentsPanelInner({
         </header>
 
         <div ref={listRef} className="cmt-list">
-          {/* Skeleton */}
           {loading && items.length === 0 && (
             <div className="cmt-skeleton">
               {Array.from({ length: 4 }).map((_, i) => (
@@ -202,31 +210,10 @@ function CommentsPanelInner({
             </div>
           )}
 
-          {/* Error + reintentar */}
           {err && (
             <div className="cmt-error">
               <div className="mb-2">{err}</div>
-              <button
-                className="btn"
-                onClick={() => {
-                  // fuerza recarga
-                  commentCache.delete(cacheKey);
-                  setErr(null);
-                  setLoading(true);
-                  measureAsync('comments.list', () =>
-                    listComments(baseId, tableId, recordId, 1, 200)
-                  )
-                    .then((r) => {
-                      commentCache.set(cacheKey, r.comments);
-                      setItems(r.comments);
-                      scrollToBottom();
-                    })
-                    .catch((e: any) => setErr(e?.message || 'No se pudo recargar'))
-                    .finally(() => setLoading(false));
-                }}
-              >
-                Reintentar
-              </button>
+              <button className="btn" onClick={loadList}>Reintentar</button>
             </div>
           )}
 
@@ -298,13 +285,11 @@ const CommentItem = memo(function CommentItem({
 }) {
   const [editing, setEditing] = useState(false);
   const [buf, setBuf] = useState(comment.body);
-
   useEffect(() => setBuf(comment.body), [comment.body]);
 
   return (
     <div className="cmt-item">
       <div className="cmt-avatar">{initials(comment.createdBy?.fullName ?? 'U')}</div>
-
       <div className="cmt-bubble">
         <div className="cmt-meta">
           {meta}
@@ -340,35 +325,13 @@ const CommentItem = memo(function CommentItem({
           <div className="cmt-actions">
             {!editing ? (
               <>
-                <button className="cmt-action" onClick={() => setEditing(true)}>
-                  Editar
-                </button>
-                <button className="cmt-action danger" onClick={onDelete}>
-                  Eliminar
-                </button>
+                <button className="cmt-action" onClick={() => setEditing(true)}>Editar</button>
+                <button className="cmt-action danger" onClick={onDelete}>Eliminar</button>
               </>
             ) : (
               <>
-                <button
-                  className="cmt-action"
-                  onClick={() => {
-                    const v = buf.trim();
-                    if (!v) return;
-                    onEdit(v);
-                    setEditing(false);
-                  }}
-                >
-                  Guardar
-                </button>
-                <button
-                  className="cmt-action"
-                  onClick={() => {
-                    setEditing(false);
-                    setBuf(comment.body);
-                  }}
-                >
-                  Cancelar
-                </button>
+                <button className="cmt-action" onClick={() => { const v = buf.trim(); if (!v) return; onEdit(v); setEditing(false); }}>Guardar</button>
+                <button className="cmt-action" onClick={() => { setEditing(false); setBuf(comment.body); }}>Cancelar</button>
               </>
             )}
           </div>
@@ -386,6 +349,5 @@ function initials(name: string) {
 }
 
 export default function CommentsPanel(props: Props) {
-  // Portal al <body> para que el drawer flote sobre toda la UI
   return createPortal(<CommentsPanelInner {...props} />, document.body);
 }
