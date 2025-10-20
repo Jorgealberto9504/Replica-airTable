@@ -16,9 +16,6 @@ import FieldDefForm from './FieldDefForm';
 import OptionEditor from './OptionEditor';
 
 import { CellEditor, ReadonlyCell, toDataTypeAttr, printCellTitle } from './CellEditors';
-
-// Eliminamos GridToolbar porque integramos su UI al header
-// import GridToolbar from './GridToolbar';
 import ColumnMenu from './ColumnMenu';
 import RowMenu from './RowMenu';
 
@@ -26,21 +23,29 @@ import GridFilters, { type FiltersValue } from './GridFilters';
 import GridSorts from './GridSorts';
 import { measureAsync } from '../../utils/metrics';
 
-/* ===== lastChange (como lo envía tu backend) ===== */
+/* === Realtime === */
+import { useRecordsRealtime } from '../../realtime/useRecordsRealtime';
+import { useFieldsRealtime } from '../../realtime/useFieldsRealtime';
+// ✨ quitamos el hook de comentarios por-registro y escuchamos el evento global
+// import { useCommentsRealtime } from '../../realtime/useCommentsRealtime';
+import { usePresenceTableRealtime, type PresenceUser } from '../../realtime/usePresenceTableRealtime';
+import { getSocket } from '../../realtime/socket';
+
+/* ===== lastChange ===== */
 type LastChange =
   | {
       kind: 'CELL';
       fieldId: number | null;
       fieldName: string | null;
       user: { id: number; fullName: string } | null;
-      at: string; // ISO
+      at: string;
     }
   | {
       kind: 'COMMENT';
       commentId: number;
       body: string;
       user: { id: number; fullName: string } | null;
-      at: string; // ISO
+      at: string;
     };
 
 type UIRecord = {
@@ -70,8 +75,6 @@ const FIELD_TYPES: FieldType[] = [
 const DEFAULT_COL_W = 180;
 const MIN_COL_W = 120;
 const MAX_COL_W = 800;
-
-/* Ancho por defecto para “Última actividad” */
 const DEFAULT_LAST_W = 260;
 
 function timeAgoFromISO(iso?: string | null) {
@@ -126,6 +129,27 @@ function typeBadgeClasses(t: FieldType) {
   }
 }
 
+function avatarInitial(u: PresenceUser) {
+  const n = (u.fullName ?? '').trim();
+  if (n) return n[0]!.toUpperCase();
+  return String(u.id)[0] ?? '?';
+}
+function nameOf(u: PresenceUser) {
+  const n = (u.fullName ?? '').trim();
+  return n || `Usuario ${u.id}`;
+}
+function presenceSummary(users: PresenceUser[], max = 2) {
+  if (!users?.length) return '';
+  const names = users.map(nameOf);
+  if (names.length <= max) return ` · ${names.join(', ')}`;
+  const rest = names.length - max;
+  return ` · ${names.slice(0, max).join(', ')} +${rest}`;
+}
+function presenceTitle(users: PresenceUser[]) {
+  if (!users?.length) return 'Sin usuarios conectados';
+  return users.map(nameOf).join(', ');
+}
+
 export default function TableGrid({ baseId, tableId, perms, canManageFields }: Props) {
   const effectivePerms: RecordPerms = {
     canCreate: !!perms?.canCreate,
@@ -142,7 +166,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   const [records, setRecords] = useState<UIRecord[]>([]);
   const [total, setTotal] = useState(0);
 
-  const [hoverCol, setHoverCol] = useState<number | null>(null);
   const [columnMenu, setColumnMenu] = useState<{ field: Field; x: number; y: number } | null>(null);
 
   const [addColOpen, setAddColOpen] = useState(false);
@@ -173,45 +196,11 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   const [filtersUI, setFiltersUI] = useState<{ open: boolean; anchor: HTMLElement | null }>({ open: false, anchor: null });
   const [sortUI, setSortUI] = useState<{ open: boolean; anchor: HTMLElement | null }>({ open: false, anchor: null });
 
-  // ===== Cerrar menú de columna
-  useEffect(() => {
-    if (!columnMenu) return;
-    function onDoc(e: MouseEvent) {
-      if (!menuRef.current) return;
-      const t = e.target as Node;
-      if (!menuRef.current.contains(t)) setColumnMenu(null);
-    }
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setColumnMenu(null); }
-    function onScroll() { setColumnMenu(null); }
-    document.addEventListener('mousedown', onDoc);
-    document.addEventListener('keydown', onKey);
-    containerRef.current?.addEventListener('scroll', onScroll, true);
-    return () => {
-      document.removeEventListener('mousedown', onDoc);
-      document.removeEventListener('keydown', onKey);
-      containerRef.current?.removeEventListener('scroll', onScroll, true);
-    };
-  }, [columnMenu]);
-
-  // ===== Cerrar menú de fila
-  useEffect(() => {
-    if (!rowMenu) return;
-    function onDoc(e: MouseEvent) {
-      if (!rowMenuRef.current) return;
-      const t = e.target as Node;
-      if (!rowMenuRef.current.contains(t)) setRowMenu(null);
-    }
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setRowMenu(null); }
-    function onScroll() { setRowMenu(null); }
-    document.addEventListener('mousedown', onDoc);
-    document.addEventListener('keydown', onKey);
-    containerRef.current?.addEventListener('scroll', onScroll, true);
-    return () => {
-      document.removeEventListener('mousedown', onDoc);
-      document.removeEventListener('keydown', onKey);
-      containerRef.current?.removeEventListener('scroll', onScroll, true);
-    };
-  }, [rowMenu]);
+  // ===== Presencia
+  const [presence, setPresence] = useState<{ count: number; users: PresenceUser[] }>({ count: 0, users: [] });
+  const presenceBtnRef = useRef<HTMLButtonElement>(null);
+  const [presenceOpen, setPresenceOpen] = useState(false);
+  const [presencePos, setPresencePos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
 
   // ===== Anchos por columna + resize
   const [colWidths, setColWidths] = useState<Record<number, number>>({});
@@ -276,7 +265,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   }
   function fieldById(id: number) { return fields.find((f) => f.id === id)!; }
 
-  // ===== Carga inicial: 1 sola petición (bootstrapGrid)
+  // ===== Carga inicial
   useEffect(() => {
     let alive = true;
     const ac = new AbortController();
@@ -300,13 +289,11 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
         );
         if (!alive) return;
 
-        // Ya vienen options embebidas
         setFields(b.fields as unknown as Field[]);
         setRecords(b.records as UIRecord[]);
         setTotal(b.total);
         setCommentCounts(b.commentCounts ?? {});
 
-        // Inicializa anchos para nuevas columnas
         setColWidths((prev) => {
           const next = { ...prev };
           (b.fields || []).forEach((ff: any) => { if (next[ff.id] == null) next[ff.id] = DEFAULT_COL_W; });
@@ -336,7 +323,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     if (!effectivePerms.canUpdate) { alert('No tienes permisos para editar registros en esta base.'); return; }
     const field = fieldById(fieldId);
 
-    // Optimista: valor y última actividad
     const nowISO = new Date().toISOString();
     setRecords((prev) =>
       prev.map((r) =>
@@ -362,7 +348,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       );
     } catch (e: any) {
       alert(e?.message || 'No se pudo guardar');
-      setPage(p => p); // fuerza re-render en la siguiente carga
+      setPage(p => p);
     }
   }
 
@@ -370,7 +356,12 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     if (!effectivePerms.canCreate) { alert('No tienes permisos para crear registros.'); return; }
     try {
       const r = await measureAsync('record.create', () => createRecord(baseId, tableId, {}));
-      setRecords((prev) => [...prev, { id: r.record.id, values: {} }]);
+      setRecords((prev) => {
+        if (prev.some(x => x.id === r.record.id)) return prev;
+        const next = [...prev, { id: r.record.id, values: {} }];
+        if (sort.length === 0) next.sort((a,b) => a.id - b.id);
+        return next;
+      });
       setTotal((t) => t + 1);
       setTimeout(() => containerRef.current?.scrollTo({ top: 999999, behavior: 'smooth' }), 50);
     } catch (e: any) { alert(e?.message || 'No se pudo crear la fila'); }
@@ -390,8 +381,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
   function openColumnMenu(e: React.MouseEvent, f: Field) {
     if (!canManageFields) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-
-    // Mantener el panel SIEMPRE visible dentro del viewport
     const MENU_W = 240;
     const margin = 8;
     const x = Math.min(
@@ -399,7 +388,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       window.innerWidth - MENU_W - margin
     );
     const y = Math.min(rect.bottom + 8, window.innerHeight - margin);
-
     setColumnMenu({ field: f, x, y });
   }
 
@@ -417,8 +405,6 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
       });
       setAddColOpen(false);
       setNewColName(''); setNewColType('TEXT'); setNewSelectOpts(['Opción 1', 'Opción 2']);
-
-      // refrescamos campos (post-mutate)
       const f = await listFields(baseId, tableId);
       const withOptions = await ensureSelectOptions(baseId, tableId, f.fields);
       setFields(withOptions);
@@ -464,7 +450,16 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     try {
       await deleteField(baseId, tableId, fieldId);
       setFields((prev) => prev.filter((f) => f.id !== fieldId));
-    } catch (e: any) { alert(e?.message || 'No se pudo eliminar'); }
+    } catch (e: any) {
+      const status = e?.status ?? e?.response?.status;
+      const serverMsg =
+        e?.response?.data?.message || e?.data?.message || e?.message;
+      if (status === 409) {
+        alert(serverMsg || 'No se puede eliminar la columna porque está en uso o tiene dependencias.');
+      } else {
+        alert(serverMsg || 'No se pudo eliminar la columna.');
+      }
+    }
   }
 
   const usageByField = useMemo(() => {
@@ -503,9 +498,189 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
     }
   }
 
+  /* ===== Realtime: Registros ===== */
+  useRecordsRealtime(baseId, tableId, {
+    onCreated: ({ recordId, values, at, user }) => {
+      setTotal((t0) => {
+        const nextTotal = t0 + 1;
+        const lastPage = Math.max(1, Math.ceil(nextTotal / pageSize));
+        const isOnCurrentPage = page === lastPage;
+
+        if (isOnCurrentPage) {
+          setRecords((prev) => {
+            if (prev.some(r => r.id === recordId)) return prev;
+            const keys = Object.keys(values ?? {});
+            let fid: number | null = null;
+            let fname: string | null = null;
+            if (keys.length) {
+              const k0 = Number(keys[0]);
+              if (!Number.isNaN(k0)) {
+                fid = k0;
+                fname = fieldById(k0)?.name ?? null;
+              }
+            }
+            const rec: UIRecord = {
+              id: recordId,
+              values: values ?? {},
+              lastChange: at
+                ? { kind: 'CELL', fieldId: fid, fieldName: fname, user: user ?? null, at }
+                : undefined,
+            };
+            const next = [...prev, rec];
+            if (sort.length === 0) next.sort((a, b) => a.id - b.id);
+            return next;
+          });
+        }
+        return nextTotal;
+      });
+    },
+
+    onUpdated: ({ recordId, values, at, user }) => {
+      if (!values || Object.keys(values).length === 0) return;
+      const keys = Object.keys(values);
+      let fid: number | null = null;
+      let fname: string | null = null;
+      if (keys.length) {
+        const k0 = Number(keys[0]);
+        if (!Number.isNaN(k0)) {
+          fid = k0;
+          fname = fieldById(k0)?.name ?? null;
+        }
+      }
+      setRecords((prev) =>
+        prev.map((r) =>
+          r.id === recordId
+            ? {
+                ...r,
+                values: { ...r.values, ...values },
+                lastChange: {
+                  kind: 'CELL',
+                  fieldId: fid,
+                  fieldName: fname,
+                  user: user ?? null,
+                  at: at ?? new Date().toISOString(),
+                },
+              }
+            : r
+        )
+      );
+    },
+
+    onTrashed: ({ recordId }) => {
+      setTotal((t0) => {
+        const nextTotal = Math.max(0, t0 - 1);
+        const lastPage = Math.max(1, Math.ceil(Math.max(1, nextTotal) / pageSize));
+        if (page > lastPage) setPage(lastPage);
+        return nextTotal;
+      });
+      setRecords((prev) => prev.filter((r) => r.id !== recordId));
+      setCommentCounts(prev => { const n = { ...prev }; delete n[recordId]; return n; });
+    },
+  });
+
+  /* ===== Realtime: Columnas ===== */
+  function upsertFieldRT(f: Field) {
+    setFields((prev) => {
+      const exists = prev.some((x) => x.id === f.id);
+      const next = exists ? prev.map((x) => (x.id === f.id ? f : x)) : [...prev, f];
+      next.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+      return next;
+    });
+    setColWidths((prev) => (prev[f.id] == null ? { ...prev, [f.id]: DEFAULT_COL_W } : prev));
+  }
+  function removeFieldRT(fieldId: number) {
+    setFields((prev) => prev.filter((f) => f.id !== fieldId));
+    setColWidths((prev) => { const n = { ...prev }; delete n[fieldId]; return n; });
+  }
+  function setFieldOptionsRT(fieldId: number, options: NonNullable<Field['options']>) {
+    setFields((prev) => prev.map((f) => (f.id === fieldId ? { ...f, options } : f)));
+  }
+
+  useFieldsRealtime(baseId, tableId, {
+    onCreated: ({ field }) => { upsertFieldRT(field as Field); },
+    onUpdated: ({ field }) => { upsertFieldRT(field as Field); },
+    onTrashed: ({ fieldId }) => { removeFieldRT(fieldId); },
+    onRestored: ({ field }) => { upsertFieldRT(field as Field); },
+    onOptionsChanged: ({ fieldId, options }) => { setFieldOptionsRT(fieldId, options as NonNullable<Field['options']>); },
+  });
+
+  /* ===== Realtime: Comentarios (tabla completa) =====
+     Escuchamos el evento global `comments:event` del hub y filtramos por tableId.
+     Con esto el icono 💬 aparece en cuanto se crea un comentario en cualquier fila. */
+  useEffect(() => {
+    const socket = getSocket();
+    const onAnyComment = (p: {
+      tableId: number;
+      recordId: number;
+      commentId: number;
+      at?: string;
+      user?: { id?: number; fullName?: string | null } | null;
+      count?: number;
+      type: 'created' | 'updated' | 'trashed';
+    }) => {
+      if (p.tableId !== tableId) return;
+
+      setCommentCounts(prev => {
+        const current = prev[p.recordId] ?? 0;
+        const delta =
+          p.type === 'created' ? 1 :
+          p.type === 'trashed' ? -1 : 0;
+        const nextVal = typeof p.count === 'number' ? p.count : Math.max(0, current + delta);
+        return { ...prev, [p.recordId]: nextVal };
+      });
+
+      if (p.type === 'created') {
+        const fullName = (p.user?.fullName ?? '').trim();
+        setLastChange(p.recordId, {
+          kind: 'COMMENT',
+          commentId: p.commentId,
+          body: 'Nuevo comentario',
+          user: p.user?.id ? { id: p.user.id, fullName: fullName || `Usuario ${p.user.id}` } : null,
+          at: p.at ?? new Date().toISOString(),
+        });
+      }
+    };
+
+    socket.on('comments:event', onAnyComment);
+    return () => { socket.off('comments:event', onAnyComment); };
+  }, [tableId]);
+
+  /* ===== Realtime: Presencia ===== */
+  usePresenceTableRealtime(baseId, tableId, (p) => setPresence({ count: p.count, users: p.users }));
+
+  // === Popover de presencia: posicionamiento + autoclose
+  useEffect(() => {
+    if (!presenceOpen) return;
+    function updatePos() {
+      const r = presenceBtnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const left = Math.min(window.innerWidth - 288, Math.max(8, r.left));
+      setPresencePos({ top: r.bottom + 8, left });
+    }
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setPresenceOpen(false); }
+    function onClick(e: MouseEvent) {
+      const t = e.target as Node;
+      const panel = document.getElementById('presence-popover');
+      if (panel?.contains(t)) return;
+      if (presenceBtnRef.current?.contains(t as Node)) return;
+      setPresenceOpen(false);
+    }
+    updatePos();
+    window.addEventListener('resize', updatePos);
+    window.addEventListener('scroll', updatePos, true);
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onClick);
+    return () => {
+      window.removeEventListener('resize', updatePos);
+      window.removeEventListener('scroll', updatePos, true);
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onClick);
+    };
+  }, [presenceOpen]);
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-      {/* Header estilo Luisa */}
+      {/* Header */}
       <div className="flex items-center justify-between p-6 border-b border-gray-200">
         <div>
           <h2 className="text-xl font-semibold text-gray-900">Registros</h2>
@@ -515,6 +690,58 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Presencia como BOTÓN con popover */}
+          <button
+            ref={presenceBtnRef}
+            onClick={() => setPresenceOpen((v) => !v)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-gray-300 bg-white text-gray-700 text-xs hover:bg-gray-50 max-w-[60vw] sm:max-w-none"
+            title={presenceTitle(presence.users)}
+          >
+            <span className={`inline-block w-2 h-2 rounded-full ${presence.count > 0 ? 'bg-green-500' : 'bg-gray-300'}`} />
+            <span className="whitespace-nowrap">
+              {presence.count} conectad{presence.count === 1 ? 'o' : 'os'}
+            </span>
+            {/* 👇 nombres en el botón, truncados si son muchos */}
+            <span className="hidden sm:inline-block max-w-[180px] truncate">
+              {presenceSummary(presence.users)}
+            </span>
+            <svg className="w-3 h-3 opacity-70" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" />
+            </svg>
+          </button>
+
+          {presenceOpen && (
+            <>
+              {/* Overlay para clicks fuera */}
+              <div className="fixed inset-0 z-[55]" />
+              {/* Panel */}
+              <div
+                id="presence-popover"
+                className="fixed z-[60] w-72 max-w-[90vw] bg-white border border-gray-200 rounded-xl shadow-lg p-3"
+                style={{ top: presencePos.top, left: presencePos.left }}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm font-semibold text-gray-900">Conectados</div>
+                  <span className="text-xs text-gray-500">{presence.count}</span>
+                </div>
+                <ul className="space-y-1 max-h-64 overflow-auto">
+                  {presence.users.length > 0 ? (
+                    presence.users.map((u) => (
+                      <li key={u.id} className="flex items-center gap-2 p-1 rounded hover:bg-gray-50">
+                        <span className="w-6 h-6 rounded-full bg-gray-200 grid place-items-center text-[11px] font-semibold text-gray-700">
+                          {avatarInitial(u)}
+                        </span>
+                        <span className="text-sm text-gray-800">{nameOf(u)}</span>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="text-sm text-gray-500 px-1 py-2">Sólo tú por aquí ✨</li>
+                  )}
+                </ul>
+              </div>
+            </>
+          )}
+
           {/* Filtros */}
           <button
             onClick={(e) => setFiltersUI({ open: true, anchor: e.currentTarget as unknown as HTMLElement })}
@@ -658,10 +885,8 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
                   className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider border-r border-gray-200 relative group pr-10"
                   title={`${f.name} (${f.type})`}
                   style={{ width: (colWidths[f.id] ?? DEFAULT_COL_W), minWidth: (colWidths[f.id] ?? DEFAULT_COL_W) }}
-                  onMouseEnter={() => setHoverCol(f.id)}
-                  onMouseLeave={() => setHoverCol((c) => (c === f.id ? null : c))}
                 >
-                  {/* Botón del menú de columna (centrado y separado del resizer) */}
+                  {/* Botón del menú de columna */}
                   {canManageFields && (
                     <button
                       className="absolute top-1/2 -translate-y-1/2 right-6 z-[5]
@@ -765,7 +990,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
                       </div>
                     </td>
 
-                    {/* Celdas de datos */}
+                    {/* Celdas */}
                     {fields.map((f) => (
                       <td
                         key={`${r.id}-${f.id}`}
@@ -872,7 +1097,7 @@ export default function TableGrid({ baseId, tableId, perms, canManageFields }: P
               <div className="muted mt-2 text-xs">
                 Define las opciones del {newColType === 'SINGLE_SELECT' ? 'Single Select' : 'Multi Select'}.
               </div>
-              <OptionEditor options={newSelectOpts} onChange={setNewSelectOpts} />
+                <OptionEditor options={newSelectOpts} onChange={setNewSelectOpts} />
             </>
           )}
         </Modal>

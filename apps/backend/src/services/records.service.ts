@@ -1,5 +1,11 @@
 // apps/backend/src/services/records.service.ts
 
+import {
+  emitRecordCreated,
+  emitRecordUpdated,
+  emitRecordTrashed,
+  emitRecordRestored,
+} from '../realtime/hub.js';
 import { prisma, prismaDirect } from './db.js';
 import { Prisma, FieldType } from '@prisma/client';
 import { badRequest, notFound } from '../utils/errors.js';
@@ -43,6 +49,16 @@ export type SortSpec = {
   dir: SortDir;
   nulls?: NullsPos; // default: "last"
 };
+
+/* ===================== HELPERS (baseId para RT) ===================== */
+async function baseIdForTable(tableId: number) {
+  const t = await prisma.tableDef.findUnique({
+    where: { id: tableId },
+    select: { baseId: true },
+  });
+  if (!t) throw notFound('Tabla no encontrada.');
+  return t.baseId;
+}
 
 /* ===================== LIST ===================== */
 /**
@@ -115,8 +131,6 @@ export async function queryRecordsSvc(
     ...(whereFilters ?? {}),
   };
 
-  // Si NO hay sort y hay paginación -> dejamos que DB pagine.
-  // Si hay sort -> traemos TODO y ordenamos en memoria, luego paginamos.
   const needInMemorySort = sort.length > 0;
 
   const [rows, total] = await Promise.all([
@@ -151,7 +165,6 @@ export async function queryRecordsSvc(
     if (selectFieldIds.length) {
       const allOptions = await prisma.selectOption.findMany({
         where: { fieldId: { in: selectFieldIds }, isTrashed: false },
-        // si existiera "order" lo ideal sería orderBy: { order: 'asc' },
         orderBy: { id: 'asc' },
         select: { id: true, fieldId: true },
       });
@@ -186,8 +199,13 @@ export async function createRecordSvc(
   values: Record<string, any> | undefined,
   userId: number | null
 ) {
-  return prismaDirect.$transaction(async (tx) => {
-    const rec = await tx.recordRow.create({
+  const baseId = await baseIdForTable(tableId);
+  const user = userId
+    ? await prisma.user.findUnique({ where: { id: userId }, select: { id: true, fullName: true } })
+    : null;
+
+  const rec = await prismaDirect.$transaction(async (tx) => {
+    const r = await tx.recordRow.create({
       data: {
         tableId,
         createdById: userId ?? undefined,
@@ -196,14 +214,23 @@ export async function createRecordSvc(
     });
 
     if (values && Object.keys(values).length) {
-      await patchCellsTx(tx, tableId, rec.id, values, userId);
+      await patchCellsTx(tx, tableId, r.id, values, userId);
       await tx.recordRow.update({
-        where: { id: rec.id },
+        where: { id: r.id },
         data: { updatedById: userId ?? undefined },
       });
     }
-    return rec;
+    return r;
   });
+
+  // 🔊 Emit RT (sala por TABLA)
+  emitRecordCreated(baseId, tableId, rec.id, {
+    values: values ?? {},
+    user,
+    at: new Date().toISOString(),
+  });
+
+  return rec;
 }
 
 export async function patchRecordSvc(
@@ -225,6 +252,18 @@ export async function patchRecordSvc(
       where: { id: recordId },
       data: { updatedById: userId ?? undefined },
     });
+  });
+
+  const baseId = await baseIdForTable(tableId);
+  const user = userId
+    ? await prisma.user.findUnique({ where: { id: userId }, select: { id: true, fullName: true } })
+    : null;
+
+  // 🔊 Emit RT — enviamos sólo el patch recibido
+  emitRecordUpdated(baseId, tableId, recordId, {
+    values,
+    user,
+    at: new Date().toISOString(),
   });
 }
 
@@ -248,6 +287,14 @@ export async function deleteRecordSvc(
       updatedById: userId ?? undefined,
     },
   });
+
+  const baseId = await baseIdForTable(tableId);
+  const user = userId
+    ? await prisma.user.findUnique({ where: { id: userId }, select: { id: true, fullName: true } })
+    : null;
+
+  // 🔊 Emit RT
+  emitRecordTrashed(baseId, tableId, recordId, { user });
 }
 
 /* ===================== HELPERS (materialización / lastChange) ===================== */
@@ -622,10 +669,17 @@ export async function restoreRecordSvc(tableId: number, recordId: number) {
   });
   if (!row || row.tableId !== tableId) throw notFound('Registro no encontrado.');
   if (!row.isTrashed) throw badRequest('El registro no está en papelera.');
-  return prisma.recordRow.update({
+
+  const updated = await prisma.recordRow.update({
     where: { id: recordId },
     data: { isTrashed: false, trashedAt: null },
   });
+
+  const baseId = await baseIdForTable(tableId);
+  // 🔊 Emit RT
+  emitRecordRestored(baseId, tableId, recordId, {});
+
+  return updated;
 }
 
 export async function deleteRecordPermanentSvc(tableId: number, recordId: number) {

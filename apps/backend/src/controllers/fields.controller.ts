@@ -22,10 +22,19 @@ import {
 } from '../services/fields.service.js';
 import { currentUserId } from '../utils/currentUser.js';
 
-// === NUEVO: auditoría detallada en update ===
+// Auditoría
 import { logAudit } from '../services/audit.service.js';
 import { AuditAction, FieldType } from '@prisma/client';
 import { prisma } from '../services/db.js';
+
+// 🔴 Realtime
+import {
+  emitFieldCreated,
+  emitFieldUpdated,
+  emitFieldTrashed,
+  emitFieldRestored,
+  emitFieldOptionsChanged,
+} from '../realtime/hub.js';
 
 const FieldTypeSchema = z.enum([
   'TEXT',
@@ -52,6 +61,8 @@ const updateFieldSchema = z.object({
   name: z.string().min(1).optional(),
   type: FieldTypeSchema.optional(),
   position: z.number().int().min(0).optional(),
+  // Opcionalmente puedes permitir options aquí si quieres reemplazo completo desde controller:
+  // options: z.array(z.object({ label: z.string().min(1), color: z.string().nullable().optional() })).optional(),
 });
 
 const createOptionSchema = z.object({
@@ -79,12 +90,18 @@ export async function listFields(req: Request, res: Response, next: NextFunction
 
 export async function createField(req: Request, res: Response, next: NextFunction) {
   try {
+    const baseId = Number(req.params.baseId);
     const tableId = Number(req.params.tableId);
     const userId = currentUserId(req, res);
     const input = createFieldSchema.parse(req.body);
-    const field = await createFieldSvc(tableId, input, userId);
 
-    // (opcional) auditoría de creación
+    const field = await createFieldSvc(tableId, input, userId);
+    if (!field) return res.status(500).json({ ok: false, error: 'No se pudo crear la columna' });
+
+    // RT
+    emitFieldCreated(baseId, tableId, field);
+
+    // Auditoría de creación (best-effort)
     try {
       const base = await prisma.tableDef.findUnique({
         where: { id: tableId },
@@ -96,13 +113,13 @@ export async function createField(req: Request, res: Response, next: NextFunctio
           ip: req.ip,
           baseId: base.baseId,
           tableId,
-          fieldId: field!.id,
+          fieldId: field.id,
           action: AuditAction.FIELD_CREATED,
-          summary: `Creó la columna "${field!.name}"`,
-          details: { name: field!.name, type: field!.type as FieldType, position: field!.position },
+          summary: `Creó la columna "${field.name}"`,
+          details: { name: field.name, type: field.type as FieldType, position: field.position },
         });
       }
-    } catch { /* no bloquear la operación por fallo de auditoría */ }
+    } catch { /* no bloquear */ }
 
     res.json({ ok: true, field });
   } catch (e) { next(e); }
@@ -110,12 +127,13 @@ export async function createField(req: Request, res: Response, next: NextFunctio
 
 export async function updateField(req: Request, res: Response, next: NextFunction) {
   try {
+    const baseId = Number(req.params.baseId);
     const tableId = Number(req.params.tableId);
     const fieldId = Number(req.params.fieldId);
     const userId = currentUserId(req, res);
     const patch = updateFieldSchema.parse(req.body);
 
-    // --- snapshot previo (incluye baseId para audit) ---
+    // Snapshot previo (para auditoría)
     const before = await prisma.field.findFirst({
       where: { id: fieldId, tableId, isTrashed: false },
       select: {
@@ -129,11 +147,25 @@ export async function updateField(req: Request, res: Response, next: NextFunctio
 
     const field = await updateFieldSvc(tableId, fieldId, patch, userId);
     if (!field) {
-      // Por tipado de Prisma podría devolver null; en la práctica no debería ocurrir
       return res.status(500).json({ ok: false, error: 'No se pudo cargar la columna actualizada' });
     }
 
-    // --- auditoría detallada (solo si teníamos snapshot previo) ---
+    // RT (campo)
+    emitFieldUpdated(baseId, tableId, field);
+
+    // RT (opciones) — si el tipo es SELECT y el servicio devolvió opciones activas
+    if (Array.isArray(field.options)) {
+      emitFieldOptionsChanged(
+        baseId,
+        tableId,
+        fieldId,
+        field.options.map(o => ({
+          id: o.id, label: o.label, color: o.color ?? null, position: o.position,
+        }))
+      );
+    }
+
+    // Auditoría detallada
     if (before && before.table) {
       const changes: Record<string, { from: any; to: any }> = {};
       const parts: string[] = [];
@@ -142,12 +174,10 @@ export async function updateField(req: Request, res: Response, next: NextFunctio
         changes.name = { from: before.name, to: field.name };
         parts.push(`nombre "${before.name}" → "${field.name}"`);
       }
-
       if (patch.type !== undefined && field.type !== before.type) {
         changes.type = { from: before.type, to: field.type };
         parts.push(`tipo ${before.type} → ${field.type}`);
       }
-
       if (patch.position !== undefined && field.position !== before.position) {
         changes.position = { from: before.position, to: field.position };
         parts.push(`posición ${before.position} → ${field.position}`);
@@ -173,6 +203,7 @@ export async function updateField(req: Request, res: Response, next: NextFunctio
 
 export async function deleteField(req: Request, res: Response, next: NextFunction) {
   try {
+    const baseId = Number(req.params.baseId);
     const tableId = Number(req.params.tableId);
     const fieldId = Number(req.params.fieldId);
     const userId = currentUserId(req, res);
@@ -184,6 +215,9 @@ export async function deleteField(req: Request, res: Response, next: NextFunctio
     });
 
     await deleteFieldSvc(tableId, fieldId, userId);
+
+    // RT
+    emitFieldTrashed(baseId, tableId, fieldId);
 
     if (snap?.table) {
       await logAudit(undefined, {
@@ -204,6 +238,7 @@ export async function deleteField(req: Request, res: Response, next: NextFunctio
 
 export async function restoreField(req: Request, res: Response, next: NextFunction) {
   try {
+    const baseId = Number(req.params.baseId);
     const tableId = Number(req.params.tableId);
     const fieldId = Number(req.params.fieldId);
 
@@ -213,6 +248,9 @@ export async function restoreField(req: Request, res: Response, next: NextFuncti
     });
 
     const field = await restoreFieldSvc(tableId, fieldId);
+
+    // RT
+    emitFieldRestored(baseId, tableId, field);
 
     if (before?.table) {
       await logAudit(undefined, {
@@ -280,52 +318,95 @@ export async function listTrashedOptions(req: Request, res: Response, next: Next
     res.json({ ok: true, options: rows });
   } catch (e) { next(e); }
 }
+
 export async function createOption(req: Request, res: Response, next: NextFunction) {
   try {
+    const baseId = Number(req.params.baseId);
+    const tableId = Number(req.params.tableId);
     const fieldId = Number(req.params.fieldId);
     const input = createOptionSchema.parse(req.body);
+
     const row = await createOptionSvc(fieldId, input);
+
+    // RT: enviar el snapshot completo de opciones activas
+    const options = await listOptionsSvc(fieldId);
+    emitFieldOptionsChanged(baseId, tableId, fieldId, options);
+
     res.json({ ok: true, option: row });
   } catch (e) { next(e); }
 }
+
 export async function updateOption(req: Request, res: Response, next: NextFunction) {
   try {
+    const baseId = Number(req.params.baseId);
+    const tableId = Number(req.params.tableId);
     const fieldId = Number(req.params.fieldId);
     const optionId = Number(req.params.optionId);
     const patch = updateOptionSchema.parse(req.body);
+
     const row = await updateOptionSvc(fieldId, optionId, patch);
+
+    const options = await listOptionsSvc(fieldId);
+    emitFieldOptionsChanged(baseId, tableId, fieldId, options);
+
     res.json({ ok: true, option: row });
   } catch (e) { next(e); }
 }
+
 export async function reorderOptions(req: Request, res: Response, next: NextFunction) {
   try {
+    const baseId = Number(req.params.baseId);
+    const tableId = Number(req.params.tableId);
     const fieldId = Number(req.params.fieldId);
     const { orderedIds } = reorderSchema.parse(req.body);
+
     await reorderOptionsSvc(fieldId, orderedIds);
+
+    const options = await listOptionsSvc(fieldId);
+    emitFieldOptionsChanged(baseId, tableId, fieldId, options);
+
     res.json({ ok: true });
   } catch (e) { next(e); }
 }
+
 export async function deleteOption(req: Request, res: Response, next: NextFunction) {
   try {
+    const baseId = Number(req.params.baseId);
+    const tableId = Number(req.params.tableId);
     const fieldId = Number(req.params.fieldId);
     const optionId = Number(req.params.optionId);
+
     await deleteOptionSvc(fieldId, optionId);
+
+    const options = await listOptionsSvc(fieldId);
+    emitFieldOptionsChanged(baseId, tableId, fieldId, options);
+
     res.json({ ok: true });
   } catch (e) { next(e); }
 }
+
 export async function restoreOption(req: Request, res: Response, next: NextFunction) {
   try {
+    const baseId = Number(req.params.baseId);
+    const tableId = Number(req.params.tableId);
     const fieldId = Number(req.params.fieldId);
     const optionId = Number(req.params.optionId);
+
     const row = await restoreOptionSvc(fieldId, optionId);
+
+    const options = await listOptionsSvc(fieldId);
+    emitFieldOptionsChanged(baseId, tableId, fieldId, options);
+
     res.json({ ok: true, option: row });
   } catch (e) { next(e); }
 }
+
 export async function deleteOptionPermanent(req: Request, res: Response, next: NextFunction) {
   try {
     const fieldId = Number(req.params.fieldId);
     const optionId = Number(req.params.optionId);
     await deleteOptionPermanentSvc(fieldId, optionId);
+    // No es necesario emitir aquí (ya estaba en papelera).
     res.json({ ok: true });
   } catch (e) { next(e); }
 }

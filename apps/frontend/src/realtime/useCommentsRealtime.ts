@@ -1,64 +1,39 @@
-// apps/frontend/src/realtime/useCommentsRealtime.ts
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { getSocket } from './socket';
 
-type CommentEvt = {
-  tableId?: number;
-  recordId: number;
-  commentId: number;
-  at?: string;
-  user?: { id: number; fullName?: string | null };
-  count?: number;
-};
+type RTUser = { id: number; fullName?: string | null } | null | undefined;
+
+type CCreated = { tableId: number; recordId: number; commentId: number; at?: string; user?: RTUser; count?: number };
+type CUpdated = CCreated;
+type CTrashed = CCreated;
 
 type Handlers = {
-  onCreated?: (p: CommentEvt) => void;
-  onUpdated?: (p: CommentEvt) => void;
-  onTrashed?: (p: CommentEvt) => void;
-  /** opcional: evento genérico (si lo quieres escuchar) */
-  onGeneric?: (p: CommentEvt & { type: 'created' | 'updated' | 'deleted' }) => void;
+  onCreated?: (p: CCreated) => void;
+  onUpdated?: (p: CUpdated) => void;
+  onTrashed?: (p: CTrashed) => void;
 };
 
-export function useCommentsRealtime(
-  baseId: number,
-  tableId: number,
-  recordId: number,
-  handlers?: Handlers
-) {
-  const socket = getSocket();
-  const handlersRef = useRef(handlers);
-  handlersRef.current = handlers;
-
+export function useCommentsRealtime(baseId: number, tableId: number, recordId: number, handlers: Handlers) {
   useEffect(() => {
-    if (!Number.isFinite(baseId) || !Number.isFinite(tableId) || !Number.isFinite(recordId)) return;
+    if (!baseId || !tableId || !recordId) return;
+    const socket = getSocket();
 
-    // Join
     socket.emit('subscribe:record', { baseId, tableId, recordId });
 
-    const onCreated = (p: CommentEvt) => {
-      if (p.recordId === recordId) handlersRef.current?.onCreated?.(p);
-    };
-    const onUpdated = (p: CommentEvt) => {
-      if (p.recordId === recordId) handlersRef.current?.onUpdated?.(p);
-    };
-    const onTrashed = (p: CommentEvt) => {
-      if (p.recordId === recordId) handlersRef.current?.onTrashed?.(p);
-    };
-    const onGeneric = (p: any) => {
-      if (p.recordId === recordId) handlersRef.current?.onGeneric?.(p);
-    };
+    const onCreated = (p: CCreated) => { if (p.recordId === recordId && p.tableId === tableId) handlers.onCreated?.(p); };
+    const onUpdated = (p: CUpdated) => { if (p.recordId === recordId && p.tableId === tableId) handlers.onUpdated?.(p); };
+    const onTrashed = (p: CTrashed) => { if (p.recordId === recordId && p.tableId === tableId) handlers.onTrashed?.(p); };
 
-    socket.on('comment.created', onCreated as any);
-    socket.on('comment.updated', onUpdated as any);
-    socket.on('comment.trashed', onTrashed as any);
-    socket.on('comments:event', onGeneric as any);
+    // eventos directos del room
+    getSocket().on('comment.created', onCreated);
+    getSocket().on('comment.updated', onUpdated);
+    getSocket().on('comment.trashed', onTrashed);
 
     return () => {
-      socket.off('comment.created', onCreated as any);
-      socket.off('comment.updated', onUpdated as any);
-      socket.off('comment.trashed', onTrashed as any);
-      socket.off('comments:event', onGeneric as any);
       socket.emit('unsubscribe:record', { baseId, tableId, recordId });
+      getSocket().off('comment.created', onCreated);
+      getSocket().off('comment.updated', onUpdated);
+      getSocket().off('comment.trashed', onTrashed);
     };
-  }, [baseId, tableId, recordId, socket]);
+  }, [baseId, tableId, recordId]);
 }
